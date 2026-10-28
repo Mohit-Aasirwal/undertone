@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 — 2026-10-28
+
+- Removed the frosted cards behind the header and the lyrics; the glow on the current line stays.
+
 ## 1.1.1 — 2026-10-28
 
 - Glass cards are borderless with feathered edges, painted through an alpha mask so the fade is
