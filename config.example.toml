@@ -50,3 +50,11 @@ deny = []
 # Where the accent colour (current line, ring tint, backdrop glow) comes from:
 # "art" = extracted from the album cover, "gtk" = your GTK theme's selection colour, "none" = neutral grey
 source = "art"
+
+[lyrics]
+# Sources tried in order; the first one with lyrics wins.
+#   "local"   .lrc next to the playing file, or "<Artist> - <Title>.lrc" / "<Title>.lrc" in local_dirs
+#   "lrclib"  lrclib.net (free, synced lyrics)
+#   "netease" music.163.com (synced lyrics, best effort; blocked in some regions)
+sources = ["local", "lrclib", "netease"]
+local_dirs = ["~/Music"]

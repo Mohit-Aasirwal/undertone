@@ -29,6 +29,7 @@ class Track:
     album: str
     length_us: int
     art_url: str
+    url: str = ""
 
     @property
     def key(self):
@@ -45,4 +46,5 @@ def track_from_metadata(meta):
         album=meta.get("xesam:album") or "",
         length_us=int(meta.get("mpris:length") or 0),
         art_url=meta.get("mpris:artUrl") or "",
+        url=meta.get("xesam:url") or "",
     )

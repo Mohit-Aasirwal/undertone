@@ -20,8 +20,8 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, PangoCairo  # n
 
 from . import __version__  # noqa: E402
 from .layout import CONFIG_PATH, load_config, resolve_box, select_monitors, window_config_for  # noqa: E402
-from .lyrics import (Lyrics, current_line_index, lrclib_search_url, lrclib_url,  # noqa: E402
-                     lyrics_from_response, pick_search_result)
+from .lyrics import current_line_index, lyrics_from_response  # noqa: E402
+from .sources import fetch_chain  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -80,34 +80,27 @@ class Mpris:
         return track, pos
 
 
-class LyricsUnavailable(Exception):
-    """Transient failure (network, 5xx): worth retrying while the track still plays."""
+DEFAULT_LYRICS = {"sources": ["local", "lrclib", "netease"], "local_dirs": ["~/Music"]}
 
 
-def _get_json(url):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
-
-
-def fetch_lyrics(track):
+def fetch_lyrics(track, sources=DEFAULT_LYRICS["sources"], local_dirs=DEFAULT_LYRICS["local_dirs"]):
+    """Cached lookup through the configured source chain. Local files are never cached (they may change)."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     key = hashlib.sha1(repr(track.key).encode()).hexdigest()
     path = os.path.join(CACHE_DIR, key + ".json")
+    if "local" in sources:
+        from .sources import read_local
+        data = read_local(track, local_dirs)
+        if data:
+            return lyrics_from_response(data)
     if os.path.exists(path):
         with open(path) as f:
-            return lyrics_from_response(json.load(f))
-    duration_s = round(track.length_us / 1_000_000)
-    try:
-        try:
-            data = _get_json(lrclib_url(track.artist, track.title, track.album, track.length_us))
-        except urllib.error.HTTPError as e:
-            if e.code != 404:
-                raise
-            data = pick_search_result(_get_json(lrclib_search_url(track.artist, track.title)), duration_s) \
-                or {"syncedLyrics": None, "plainLyrics": None, "instrumental": False}
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        raise LyricsUnavailable(str(e)) from e
+            data = json.load(f)
+        # entries cached before 1.0 carry no source; they all came from LRCLIB
+        data.setdefault("source", "lrclib" if (data.get("syncedLyrics") or data.get("plainLyrics")
+                                               or data.get("instrumental")) else "none")
+        return lyrics_from_response(data)
+    data = fetch_chain(track, [x for x in sources if x != "local"], local_dirs)
     with open(path, "w") as f:
         json.dump(data, f)
     return lyrics_from_response(data)
@@ -184,8 +177,9 @@ class AudioLevels:
 class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
-    def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings"):
+    def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None):
         self.windows = windows
+        self.lyrics_cfg = {**DEFAULT_LYRICS, **(lyrics_cfg or {})}
         self.audio = audio
         self.vis_mode = vis_mode if vis_mode in MODES else MODES[0]
         self.theme_source = (theme or DEFAULT_THEME)["source"]
@@ -248,6 +242,7 @@ class Playback:
             "lyrics": (None if self.lyrics is None else
                        "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
                        "instrumental" if self.lyrics.instrumental else "none"),
+            "lyrics_source": self.lyrics.source if self.lyrics else None,
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
@@ -288,7 +283,7 @@ class Playback:
 
     def load_for(self, track):
         try:
-            lyrics = fetch_lyrics(track)
+            lyrics = fetch_lyrics(track, self.lyrics_cfg["sources"], self.lyrics_cfg["local_dirs"])
         except Exception as e:  # transient or unexpected: show a notice and retry
             print("lyrics unavailable, retrying later:", e, file=sys.stderr)
             lyrics = None
@@ -649,7 +644,7 @@ def main(argv=None):
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
-    state = Playback(windows, audio, config.get("players"), theme, vis["mode"])
+    state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

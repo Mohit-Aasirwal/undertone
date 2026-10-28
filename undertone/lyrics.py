@@ -34,6 +34,7 @@ class Lyrics:
     synced: list | None
     plain: str | None
     instrumental: bool = False
+    source: str = "none"
 
 
 def lyrics_from_response(data):
@@ -42,6 +43,7 @@ def lyrics_from_response(data):
         synced=parse_lrc(synced_text) if synced_text else None,
         plain=data.get("plainLyrics") or None,
         instrumental=bool(data.get("instrumental")),
+        source=data.get("source") or "none",
     )
 
 
