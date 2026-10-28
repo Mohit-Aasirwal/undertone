@@ -24,6 +24,8 @@ from .lyrics import (Lyrics, current_line_index, lrclib_search_url, lrclib_url, 
                      lyrics_from_response, pick_search_result)
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, ring_radii, smooth_levels  # noqa: E402
+from .control import ControlService, ctl_main  # noqa: E402
+from .offsets import Offsets  # noqa: E402
 
 CACHE_DIR = os.path.expanduser("~/.cache/undertone")
 POLL_MS = 250
@@ -34,6 +36,8 @@ DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2}
 MPRIS_PREFIX = "org.mpris.MediaPlayer2."
 USER_AGENT = f"undertone/{__version__} (https://github.com/Mohit-Aasirwal/undertone)"
 AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
+OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
+MODES = ["rings"]
 
 
 class Mpris:
@@ -179,7 +183,57 @@ class Playback:
         self.pos_at = time.monotonic()
         self.last_playing_at = 0.0
         self.loading = False
+        self.offsets = Offsets(OFFSETS_PATH)
+        self.hidden_by_user = False
+        self.vis_mode = MODES[0]
+        self.control = ControlService({
+            "Toggle": self.toggle, "Show": lambda: self.set_hidden(False), "Hide": lambda: self.set_hidden(True),
+            "CycleVisualizer": self.cycle_visualizer, "Nudge": self.nudge, "SetOffset": self.set_offset,
+            "SetGlobalOffset": self.set_global_offset, "Status": self.status,
+        })
         GLib.timeout_add(POLL_MS, self.poll)
+
+    # ---- control surface -------------------------------------------------
+    def set_hidden(self, hidden):
+        self.hidden_by_user = hidden
+        for win in self.windows:
+            (win.hide if hidden or not self.track else win.show_all)()
+
+    def toggle(self):
+        self.set_hidden(not self.hidden_by_user)
+
+    def cycle_visualizer(self):
+        self.vis_mode = MODES[(MODES.index(self.vis_mode) + 1) % len(MODES)]
+        self.redraw()
+        return self.vis_mode
+
+    def nudge(self, ms):
+        if not self.track:
+            raise RuntimeError("nothing is playing")
+        return self.offsets.nudge(self.track.key, ms)
+
+    def set_offset(self, ms):
+        if not self.track:
+            raise RuntimeError("nothing is playing")
+        self.offsets.set(self.track.key, ms)
+
+    def set_global_offset(self, ms):
+        self.offsets.global_ms = ms
+
+    def status(self):
+        t = self.track
+        return {
+            "visible": any(w.get_visible() for w in self.windows),
+            "hidden_by_user": self.hidden_by_user,
+            "track": {"title": t.title, "artist": t.artist, "album": t.album, "length_s": t.length_us / 1e6} if t else None,
+            "position_s": round(self.position(), 3) if t else None,
+            "offset_ms": self.offsets.get(t.key) if t else None,
+            "global_offset_ms": self.offsets.global_ms,
+            "lyrics": (None if self.lyrics is None else
+                       "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
+                       "instrumental" if self.lyrics.instrumental else "none"),
+            "visualizer": self.vis_mode,
+        }
         if audio:
             GLib.timeout_add(FRAME_MS, self.animate)
 
@@ -200,7 +254,7 @@ class Playback:
                 self.loading = True
                 threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
             for win in self.windows:
-                if not win.get_visible():
+                if not win.get_visible() and not self.hidden_by_user:
                     win.show_all()
         elif self.track and now - self.last_playing_at > HIDE_GRACE_S:
             for win in self.windows:
@@ -236,7 +290,8 @@ class Playback:
         return False
 
     def position(self):
-        return self.pos + (time.monotonic() - self.pos_at)
+        raw = self.pos + (time.monotonic() - self.pos_at)
+        return raw + (self.offsets.total_seconds(self.track.key) if self.track else 0.0)
 
 
 class Lightbox(Gtk.Window):
@@ -492,6 +547,7 @@ def monitors():
 USAGE = f"""undertone {__version__} — desktop-layer lyrics with an audio-reactive visualizer
 
 usage: undertone [--list-monitors | --install-autostart | --uninstall-autostart | --version]
+       undertone ctl toggle|show|hide|cycle-vis|nudge <ms>|offset <ms>|global-offset <ms>|status
 
 Runs until killed. Config: {CONFIG_PATH}
 """
@@ -521,6 +577,8 @@ def main(argv=None):
     if "--version" in argv:
         print(__version__)
         return
+    if argv and argv[0] == "ctl":
+        return ctl_main(argv[1:])
     if "--install-autostart" in argv:
         return install_autostart()
     if "--uninstall-autostart" in argv:
