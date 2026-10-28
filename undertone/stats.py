@@ -40,6 +40,8 @@ class History:
 
 
 def _dur(seconds):
+    if seconds < 60:
+        return f"{int(seconds)}s"
     h, m = divmod(int(seconds) // 60, 60)
     return f"{h}h {m}m" if h else f"{m}m"
 

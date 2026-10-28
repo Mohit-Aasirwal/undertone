@@ -25,6 +25,7 @@ from .sources import EMPTY, fetch_chain  # noqa: E402
 from .translate import translate_lines  # noqa: E402
 from .backdrop import ken_burns_scale  # noqa: E402
 from .idle import Screensaver, idle_seconds  # noqa: E402
+from .stats import DB_PATH, MIN_PLAY_S, History, format_report  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -190,8 +191,11 @@ class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
-                 translation=None, backdrop=None, screensaver=None):
+                 translation=None, backdrop=None, screensaver=None, history_path=DB_PATH):
         self.windows = windows
+        self.history = History(history_path)
+        self.played_s = 0.0  # seconds of the current track actually heard
+        self.last_tick = None
         ss = {**DEFAULT_SCREENSAVER, **(screensaver or {})}
         self.screensaver = Screensaver(ss["idle_minutes"] if ss["enabled"] else 0, self.set_raised)
         self.raised = False
@@ -285,11 +289,21 @@ class Playback:
             "translated": self.translations is not None,
             "backdrop_scale": round(self.kb_scale, 4),
             "screensaver": self.raised,
+            "played_s": round(self.played_s),
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
             "pulse": round(self.audio.pulse, 3) if self.audio else None,
         }
+
+    def finish_play(self):
+        """Log the track that just ended if it was listened to for long enough to count."""
+        if self.track and self.played_s >= MIN_PLAY_S:
+            try:
+                self.history.record(self.track, round(self.played_s), self.lyrics.source if self.lyrics else "none")
+            except Exception as e:
+                print("history write failed:", e, file=sys.stderr)
+        self.played_s = 0.0
 
     def drift(self):
         """Advance the backdrop zoom and repaint whole windows; between ticks every partial redraw
@@ -312,17 +326,24 @@ class Playback:
             self.last_playing_at = now
             self.pos, self.pos_at = pos, now
             if self.track is None or track.key != self.track.key:
+                self.finish_play()
                 self.track, self.lyrics, self.art, self.translations = track, None, None, None
                 self.started_at = now
                 self.loading = True
                 threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
+            elif self.last_tick is not None:
+                self.played_s += now - self.last_tick
+            self.last_tick = now
             for win in self.windows:
                 if not win.get_visible() and not self.hidden_by_user:
                     win.show_all()
         elif self.track and now - self.last_playing_at > HIDE_GRACE_S:
             for win in self.windows:
                 win.hide()
+            self.finish_play()
             self.track = None
+        if not track:
+            self.last_tick = None
         self.redraw()
         return True
 
@@ -713,6 +734,7 @@ USAGE = f"""undertone {__version__} — desktop-layer lyrics with an audio-react
 
 usage: undertone [--list-monitors | --install-autostart | --uninstall-autostart | --version]
        undertone ctl toggle|show|hide|cycle-vis|nudge <ms>|offset <ms>|global-offset <ms>|status
+       undertone stats [--days N]        listening history (default 7 days; --days 0 for all time)
 
 Runs until killed. Config: {CONFIG_PATH}
 """
@@ -744,6 +766,13 @@ def main(argv=None):
         return
     if argv and argv[0] == "ctl":
         return ctl_main(argv[1:])
+    if argv and argv[0] == "stats":
+        days = 7
+        if "--days" in argv:
+            days = int(argv[argv.index("--days") + 1]) or None
+        db = History(os.environ.get("UNDERTONE_HISTORY") or DB_PATH)
+        print(format_report(db.report(days=days), days=days))
+        return
     if "--install-autostart" in argv:
         return install_autostart()
     if "--uninstall-autostart" in argv:
@@ -770,7 +799,8 @@ def main(argv=None):
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
-                     config.get("translation"), config.get("backdrop"), config.get("screensaver"))
+                     config.get("translation"), config.get("backdrop"), config.get("screensaver"),
+                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH)
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

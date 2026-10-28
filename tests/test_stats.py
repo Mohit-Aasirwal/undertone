@@ -28,7 +28,8 @@ class HistoryDb(unittest.TestCase):
         self.assertEqual(rep["plays"], 4)
         self.assertEqual(rep["seconds"], 990)
         self.assertEqual(rep["top_artists"][0], ("Gojira", 3, 590))
-        self.assertEqual(rep["top_tracks"][0], ("Silvera", "Gojira", 2, 320))
+        self.assertEqual(rep["top_tracks"][0], ("Schism", "TOOL", 1, 400))   # ranked by time listened
+        self.assertEqual(rep["top_tracks"][1], ("Silvera", "Gojira", 2, 320))
         self.assertEqual(rep["lyrics_coverage"], {"lrclib": 2, "local": 1, "none": 1})
 
     def test_day_window_filters_old_plays(self):
