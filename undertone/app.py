@@ -632,7 +632,9 @@ class Lightbox(Gtk.Window):
                 self.scroll = None
         cr.save()
         cr.identity_matrix()
-        cr.rectangle(0, self.LYRICS_TOP * self.scale, dw, dh)  # never glide over the header
+        # lines stay inside the glass card: never over the header, never past the card's bottom edge
+        card_top, card_bottom = (self.LYRICS_TOP - 14 + 2) * self.scale, (h - 26 - 2) * self.scale
+        cr.rectangle(0, card_top, dw, card_bottom - card_top)
         cr.clip()
         cr.translate(0, offset * self.scale)
         cr.set_source_surface(surface, 0, 0)
