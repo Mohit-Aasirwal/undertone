@@ -1,0 +1,37 @@
+# Undertone configuration. Copy to ~/.config/undertone/config.toml and restart undertone.
+# List your monitors with:  undertone --list-monitors
+
+# Which monitors get a lyrics box: "all", "primary", or a list of names/indices,
+# e.g. ["HDMI-A-0"] or [0, 1] or ["DP-1-0", 0]
+monitors = "all"
+
+[window]
+# Box width: "fill", pixels (1280), or percent of the monitor ("70%")
+width = "fill"
+# Box height: same forms as width. Leave unset to derive it from ratio, or to fill.
+# height = 720
+# Aspect ratio used when height is unset, e.g. "16:9", "4:3", "21:9", "1:1"
+# ratio = "16:9"
+# Where the box sits: center, top, bottom, left, right, top-left, top-right, bottom-left, bottom-right
+anchor = "center"
+# Gap in pixels between the box and the monitor edges
+margin = 0
+# Text/UI scale. Unset means proportional to box height (1.0 at 1080px tall).
+# scale = 1.0
+
+# Per-monitor overrides go in a sub-table named after the monitor (name or index).
+# Any key from [window] can be overridden here.
+#
+# [window.DP-1-0]
+# width = "60%"
+# ratio = "16:9"
+# anchor = "bottom-right"
+# margin = 40
+
+[visualizer]
+# Concentric rings behind the lyrics, driven by the audio playing on the default output.
+enabled = true
+# Number of rings; inner rings follow bass, outer rings follow treble
+rings = 10
+# Stroke opacity (0..1). Keep it low for a faint grey look.
+opacity = 0.2
