@@ -25,6 +25,7 @@ from .lyrics import (Lyrics, current_line_index, lrclib_search_url, lrclib_url, 
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, ring_radii, smooth_levels  # noqa: E402
 from .control import ControlService, ctl_main  # noqa: E402
+from .beat import OnsetDetector  # noqa: E402
 from .offsets import Offsets  # noqa: E402
 from .theme import FALLBACK_ACCENT, FALLBACK_BASE, gtk_accent, palette_from_pixbuf  # noqa: E402
 
@@ -136,16 +137,21 @@ class AudioLevels:
         self.n_bands = n_bands
         self.levels = np.zeros(n_bands)
         self.reference = 1e-6
+        self.detector = OnsetDetector(self.RATE / self.FRAME)
+        self.pulse = 0.0
+        self.bpm = 0
         self.lock = threading.Lock()
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
         window = np.hanning(self.FRAME)
-        cmd = ["parec", "--device=@DEFAULT_MONITOR@", "--format=float32le", f"--rate={self.RATE}",
-               "--channels=1", "--latency-msec=40", "--raw"]
+        # UNDERTONE_AUDIO_CMD replaces parec with any command that writes f32le mono 48 kHz to stdout
+        override = os.environ.get("UNDERTONE_AUDIO_CMD")
+        cmd = override or ("parec --device=@DEFAULT_MONITOR@ --format=float32le "
+                           f"--rate={self.RATE} --channels=1 --latency-msec=40 --raw")
         while True:
             try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             except FileNotFoundError:
                 print("parec not found; visualizer disabled", file=sys.stderr)
                 return
@@ -158,16 +164,21 @@ class AudioLevels:
                 # slowly decaying running peak so quiet passages still move the rings
                 self.reference = max(float(mag.max()), self.reference * 0.995, 1e-6)
                 new = band_levels(mag, self.RATE, self.n_bands, reference=self.reference)
+                bass = float(np.mean(new[: max(1, self.n_bands // 4)]))
+                self.detector.feed(bass)
                 with self.lock:
                     self.levels = smooth_levels(self.levels, new, attack=0.6, decay=0.12)
+                    self.pulse, self.bpm = self.detector.pulse(), self.detector.tempo_bpm()
             proc.wait()
             with self.lock:
-                self.levels = np.zeros(self.n_bands)
+                self.levels, self.pulse, self.bpm = np.zeros(self.n_bands), 0.0, 0
+            if override:
+                return  # a test feed ended; nothing to reconnect to
             time.sleep(2)  # sink went away or parec died: retry
 
     def snapshot(self):
         with self.lock:
-            return self.levels.copy()
+            return {"levels": self.levels.copy(), "pulse": self.pulse, "bpm": self.bpm}
 
 
 class Playback:
@@ -238,6 +249,8 @@ class Playback:
                        "instrumental" if self.lyrics.instrumental else "none"),
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
+            "bpm": self.audio.bpm if self.audio else None,
+            "pulse": round(self.audio.pulse, 3) if self.audio else None,
         }
         if audio:
             GLib.timeout_add(FRAME_MS, self.animate)
@@ -356,9 +369,10 @@ class Lightbox(Gtk.Window):
         self.draw_background(cr, w, h)
         if not self.track:
             return
+        audio = self.state.audio.snapshot() if self.state.audio else {"levels": [], "pulse": 0.0, "bpm": 0}
         if self.visualizer and self.state.audio:
-            self.draw_rings(cr, w, h, self.state.audio.snapshot())
-        self.draw_text_layer(cr, w, h)
+            self.draw_rings(cr, w, h, audio["levels"], audio["pulse"])
+        self.draw_text_layer(cr, w, h, audio["pulse"])
 
     def lyrics_content(self):
         """What the lyrics area should show right now: (notice, lines, idx, highlight)."""
@@ -377,7 +391,8 @@ class Lightbox(Gtk.Window):
             return (None, lines, min(int(frac * len(lines)), len(lines) - 1), False)
         return ("No lyrics found", None, -1, False)
 
-    def draw_text_layer(self, cr, w, h):
+    def draw_text_layer(self, cr, w, h, pulse=0.0):
+        """Header and non-current lines from one cache; the current line from its own, scaled by the beat."""
         dw, dh = round(w * self.scale), round(h * self.scale)
         notice, lines, idx, highlight = self.lyrics_content()
         key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh, self.theme["accent"])
@@ -386,15 +401,30 @@ class Lightbox(Gtk.Window):
             tc = cairo.Context(surface)
             tc.scale(self.scale, self.scale)
             self.draw_header(tc, w)
+            cur_surface, cur_cy = None, 0
             if notice:
                 self.draw_notice(tc, w, h, notice)
             else:
-                self.draw_lyrics(tc, w, h, lines, idx, highlight)
-            self.text_cache = (key, surface)
+                cur_cy = self.draw_lyrics(tc, w, h, lines, idx, highlight, part="others")
+                if highlight and idx >= 0:
+                    cur_surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
+                    cc = cairo.Context(cur_surface)
+                    cc.scale(self.scale, self.scale)
+                    self.draw_lyrics(cc, w, h, lines, idx, highlight, part="current")
+            self.text_cache = (key, surface, cur_surface, cur_cy)
+        _, surface, cur_surface, cur_cy = self.text_cache
         cr.save()
         cr.identity_matrix()
-        cr.set_source_surface(self.text_cache[1], 0, 0)
+        cr.set_source_surface(surface, 0, 0)
         cr.paint()
+        if cur_surface is not None:
+            k = 1.0 + 0.04 * pulse
+            cx, cy = dw / 2, cur_cy * self.scale
+            cr.translate(cx, cy)
+            cr.scale(k, k)
+            cr.translate(-cx, -cy)
+            cr.set_source_surface(cur_surface, 0, 0)
+            cr.paint()
         cr.restore()
 
     def draw_background(self, cr, w, h):
@@ -448,13 +478,14 @@ class Lightbox(Gtk.Window):
         return (int((cx - r) * self.scale), int((cy - r) * self.scale),
                 int(2 * r * self.scale) + 2, int(2 * r * self.scale) + 2)
 
-    def draw_rings(self, cr, w, h, levels):
+    def draw_rings(self, cr, w, h, levels, pulse=0.0):
         cx, cy, max_r = self.ring_geometry(w, h)
         n = len(levels)
         base = max_r * 0.22
         spacing = (max_r - base) / max(n, 1)
         opacity = self.visualizer["opacity"]
-        for r, level in zip(ring_radii(levels, base, spacing, spacing * 0.9), levels):
+        kick = pulse * spacing * 0.5  # every ring jumps outward on the beat
+        for r, level in zip(ring_radii(levels, base + kick, spacing, spacing * 0.9), levels):
             ar, ag, ab = self.theme["accent"]
             mix = 0.5 * float(level)  # grey when quiet, leaning to the accent when loud
             cr.set_source_rgba(0.85 + (ar - 0.85) * mix, 0.85 + (ag - 0.85) * mix, 0.88 + (ab - 0.88) * mix,
@@ -490,7 +521,9 @@ class Lightbox(Gtk.Window):
         cr.move_to(x, y + 66)
         PangoCairo.show_layout(cr, layout)
 
-    def draw_lyrics(self, cr, w, h, lines, idx, highlight):
+    def draw_lyrics(self, cr, w, h, lines, idx, highlight, part="all"):
+        """Draw lines centred on the current one. `part` selects "all", "others" or just "current".
+        Returns the current line's vertical centre."""
         top, margin = 230, 160
         centre_y = top + (h - top) / 2
         layout = PangoCairo.create_layout(cr)
@@ -514,7 +547,8 @@ class Lightbox(Gtk.Window):
             yy -= hh + gap
             if yy + hh < top:
                 break
-            self.draw_line(cr, layout, lines[i], margin, yy, False, highlight, (y - yy) / (centre_y - top))
+            if part != "current":
+                self.draw_line(cr, layout, lines[i], margin, yy, False, highlight, (y - yy) / (centre_y - top))
         # current and below
         yy = y
         for i in range(cur, len(lines)):
@@ -522,8 +556,10 @@ class Lightbox(Gtk.Window):
                 break
             hh = height_of(i)
             is_cur = highlight and i == idx
-            self.draw_line(cr, layout, lines[i], margin, yy, is_cur, highlight, (yy - y) / (h - centre_y))
+            if part == "all" or (part == "current") == is_cur:
+                self.draw_line(cr, layout, lines[i], margin, yy, is_cur, highlight, (yy - y) / (h - centre_y))
             yy += hh + gap
+        return y + height_of(cur) / 2
 
     def draw_line(self, cr, layout, text, x, y, is_cur, highlight, dist):
         layout.set_font_description(Pango.FontDescription("Sans Bold 34") if is_cur else Pango.FontDescription("Sans 24"))
