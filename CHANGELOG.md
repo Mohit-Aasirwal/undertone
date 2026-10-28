@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 — 2026-10-28
+
+- Glass cards are borderless with feathered edges, painted through an alpha mask so the fade is
+  smooth (the previous layered fill quantized into visible bands).
+- The header chip is sized to the title and artist line instead of a fixed width, and stays visible
+  on tracks without lyrics.
+- CI no longer creates GitHub releases; it tests and keeps build artifacts on the run. Releases are
+  created by the maintainer.
+
 ## 1.1.0 — 2026-10-28
 
 - Beat detection now works on real music: onsets come from linear bass energy instead of the

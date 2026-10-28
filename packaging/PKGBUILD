@@ -1,6 +1,6 @@
 # Maintainer: Mohit Aasirwal
 pkgname=undertone
-pkgver=1.1.0
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="Desktop-layer lyrics lightbox with an audio-reactive visualizer"
 arch=('any')

@@ -590,8 +590,7 @@ class Lightbox(Gtk.Window):
             surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
             sc = cairo.Context(surface)
             sc.scale(self.scale, self.scale)
-            if not self.full_visual():
-                self.draw_glass_panel(sc, w, h)
+            self.draw_glass_panel(sc, w, h, self.header_width(sc, w), lyrics_card=not self.full_visual())
             self.draw_header(sc, w)
             if notice:
                 self.draw_notice(sc, w, h, notice)
@@ -662,32 +661,48 @@ class Lightbox(Gtk.Window):
         band = 70
         return (0, int((cy - band) * self.scale), int(self.area.get_allocated_width()), int(2 * band * self.scale) + 2)
 
-    def draw_glass_panel(self, cr, w, h):
-        """Frosted card behind the lyrics column and a chip behind the header."""
-        ar, ag, ab = self.theme["accent"]
-        for (x, y, pw, ph, r) in ((self.LYRICS_MARGIN - 48, self.LYRICS_TOP - 14, w - 2 * (self.LYRICS_MARGIN - 48),
-                                   h - self.LYRICS_TOP - 26, 30), (40, 40, 620, 152, 24)):
-            rounded_rect(cr, x, y, pw, ph, r)
-            fill = cairo.LinearGradient(0, y, 0, y + ph)
-            fill.add_color_stop_rgba(0, 1, 1, 1, 0.085)
-            fill.add_color_stop_rgba(1, 1, 1, 1, 0.035)
-            cr.set_source_rgba(0.02, 0.02, 0.04, 0.22)
-            cr.fill_preserve()
+    def draw_glass_panel(self, cr, w, h, header_w, lyrics_card=True):
+        """Frosted, borderless cards with feathered edges: one behind the header, one behind the lyrics column.
+        The fill is painted once through a feathered alpha mask, so the edge fade is smooth (stacking many
+        faint layers quantizes to visible bands at 8 bits)."""
+        m, top = self.LYRICS_MARGIN, self.LYRICS_TOP
+        cards = [(40, 40, header_w, 152, 24, 22)]
+        if lyrics_card:
+            cards.append((m - 48, top - 14, w - 2 * (m - 48), h - top - 26, 30, 40))
+        dw, dh = round(w * self.scale), round(h * self.scale)
+        for x, y, pw, ph, r, feather in cards:
+            mask = cairo.ImageSurface(cairo.FORMAT_A8, dw, dh)
+            mc = cairo.Context(mask)
+            mc.scale(self.scale, self.scale)
+            mc.set_operator(cairo.OPERATOR_ADD)
+            steps = 24
+            for k in range(steps):  # nested rounded rects summing to full coverage at the core
+                inset = feather * (steps - 1 - k) / steps
+                rounded_rect(mc, x + inset, y + inset, pw - 2 * inset, ph - 2 * inset, max(r - inset, 4))
+                mc.set_source_rgba(0, 0, 0, 1 / steps)
+                mc.fill()
+            cr.save()
+            cr.identity_matrix()
+            cr.set_source_rgba(0.02, 0.02, 0.04, 0.24)
+            cr.mask_surface(mask, 0, 0)
+            fill = cairo.LinearGradient(0, y * self.scale, 0, (y + ph) * self.scale)
+            fill.add_color_stop_rgba(0, 1, 1, 1, 0.10)
+            fill.add_color_stop_rgba(1, 1, 1, 1, 0.04)
             cr.set_source(fill)
-            cr.fill_preserve()
-            cr.set_source_rgba(1, 1, 1, 0.13)
-            cr.set_line_width(1.0)
-            cr.stroke()
-            # specular highlight along the top edge, faintly tinted by the accent
-            hl = cairo.LinearGradient(x, 0, x + pw, 0)
-            hl.add_color_stop_rgba(0, 1, 1, 1, 0)
-            hl.add_color_stop_rgba(0.5, 0.6 + 0.4 * ar, 0.6 + 0.4 * ag, 0.6 + 0.4 * ab, 0.35)
-            hl.add_color_stop_rgba(1, 1, 1, 1, 0)
-            cr.set_source(hl)
-            cr.set_line_width(1.5)
-            cr.move_to(x + r, y + 1)
-            cr.line_to(x + pw - r, y + 1)
-            cr.stroke()
+            cr.mask_surface(mask, 0, 0)
+            cr.restore()
+
+    def header_width(self, cr, w):
+        """Width of the header chip: art, gap, the wider of title/subtitle, padding; capped to the window."""
+        layout = PangoCairo.create_layout(cr)
+        sub = self.track.artist + (f"  ·  {self.track.album}" if self.track.album else "")
+        widest = 0
+        for font, text in (("Sans Bold 22", self.track.title), ("Sans 15", sub)):
+            layout.set_font_description(Pango.FontDescription(font))
+            layout.set_text(text, -1)
+            widest = max(widest, layout.get_pixel_size()[0])
+        text_x = 64 + (120 + 28 if self.art else 0)
+        return min(text_x + widest + 40 - 40, w - 80)
 
     def karaoke_progress(self, idx):
         ly = self.lyrics
@@ -773,7 +788,7 @@ class Lightbox(Gtk.Window):
         layout = PangoCairo.create_layout(cr)
         layout.set_font_description(Pango.FontDescription("Sans Bold 22"))
         layout.set_text(self.track.title, -1)
-        layout.set_width((w - x - 64) * Pango.SCALE)
+        layout.set_width((w - x - 80) * Pango.SCALE)
         layout.set_ellipsize(Pango.EllipsizeMode.END)
         cr.set_source_rgba(1, 1, 1, 0.95)
         cr.move_to(x, y + 22)
