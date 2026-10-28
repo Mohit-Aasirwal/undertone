@@ -20,7 +20,7 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, PangoCairo  # n
 
 from . import __version__  # noqa: E402
 from .layout import CONFIG_PATH, load_config, resolve_box, select_monitors, window_config_for  # noqa: E402
-from .lyrics import current_line_index, lyrics_from_response  # noqa: E402
+from .lyrics import current_line_index, lyrics_from_response, word_progress  # noqa: E402
 from .sources import fetch_chain  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
@@ -345,6 +345,7 @@ class Lightbox(Gtk.Window):
         self.area.connect("draw", self.on_draw)
         self.add(self.area)
         self.state = None
+        self.cur_extent = (0, 0)  # x and width of the current line's ink, reference coordinates
         self.bg_cache = None    # (key, surface) of the dimmed art backdrop
         self.text_cache = None  # (key, surface) of header + lyrics; re-rendered when the line changes
 
@@ -409,8 +410,8 @@ class Lightbox(Gtk.Window):
                     cc = cairo.Context(cur_surface)
                     cc.scale(self.scale, self.scale)
                     self.draw_lyrics(cc, w, h, lines, idx, highlight, part="current")
-            self.text_cache = (key, surface, cur_surface, cur_cy)
-        _, surface, cur_surface, cur_cy = self.text_cache
+            self.text_cache = (key, surface, cur_surface, cur_cy, self.cur_extent)
+        _, surface, cur_surface, cur_cy, (ex0, ew) = self.text_cache
         cr.save()
         cr.identity_matrix()
         cr.set_source_surface(surface, 0, 0)
@@ -422,8 +423,22 @@ class Lightbox(Gtk.Window):
             cr.scale(k, k)
             cr.translate(-cx, -cy)
             cr.set_source_surface(cur_surface, 0, 0)
-            cr.paint()
+            progress = self.karaoke_progress(idx)
+            if progress >= 1.0:
+                cr.paint()
+            else:  # karaoke: dim whole line, then the sung part at full strength
+                cr.paint_with_alpha(0.4)
+                cr.rectangle(ex0 * self.scale, 0, ew * self.scale * progress, dh)
+                cr.clip()
+                cr.paint()
         cr.restore()
+
+    def karaoke_progress(self, idx):
+        ly = self.lyrics
+        if not ly or not ly.words or idx < 0 or idx >= len(ly.words) or not ly.words[idx]:
+            return 1.0
+        line_end = ly.synced[idx + 1][0] if idx + 1 < len(ly.synced) else ly.synced[idx][0] + 5.0
+        return word_progress(ly.words[idx], self.position(), line_end)
 
     def draw_background(self, cr, w, h):
         """Paint the dimmed art backdrop from a cached surface; re-render only when art or size changes."""
@@ -546,6 +561,8 @@ class Lightbox(Gtk.Window):
         layout.set_font_description(Pango.FontDescription("Sans Bold 34") if is_cur else Pango.FontDescription("Sans 24"))
         layout.set_text(text or "♪", -1)
         if is_cur:
+            ink, _logical = layout.get_pixel_extents()
+            self.cur_extent = (x + ink.x, ink.width)
             cr.set_source_rgba(*self.theme["accent"], 1.0)
         elif highlight:
             cr.set_source_rgba(1, 1, 1, max(0.12, 0.55 - 0.45 * min(dist, 1.0)))

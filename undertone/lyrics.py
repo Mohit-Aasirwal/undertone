@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 _TS = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
+_WORD_TS = re.compile(r"<(\d+):(\d+(?:\.\d+)?)>")
 
 
 def parse_lrc(text):
@@ -19,6 +20,53 @@ def parse_lrc(text):
     return out
 
 
+def parse_enhanced_lrc(text):
+    """Like parse_lrc but keeps per-word timing from <mm:ss.xx> tags.
+
+    Returns [(line_time, clean_text, words_or_None)] where words is [(time, word), ...]."""
+    out = []
+    for raw in text.splitlines():
+        stamps = _TS.findall(raw)
+        if not stamps:
+            continue
+        body = _TS.sub("", raw).strip()
+        words = None
+        if _WORD_TS.search(body):
+            words = []
+            parts = _WORD_TS.split(body)  # [lead, m, s, text, m, s, text, ...]
+            for i in range(1, len(parts), 3):
+                t = int(parts[i]) * 60 + float(parts[i + 1])
+                word = parts[i + 2].strip()
+                if word:
+                    words.append((t, word))
+            body = " ".join(w for _, w in words)
+        for m, sec in stamps:
+            out.append((int(m) * 60 + float(sec), body, words))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def word_progress(words, position, line_end):
+    """Fraction (0..1) of the line's characters sung by `position`, interpolating inside the current word."""
+    if not words:
+        return 1.0
+    total = sum(len(w) for _, w in words) + (len(words) - 1)  # words plus single spaces
+    if total <= 0:
+        return 1.0
+    done = 0.0
+    for i, (t, w) in enumerate(words):
+        length = len(w) + (1 if i < len(words) - 1 else 0)
+        nxt = words[i + 1][0] if i + 1 < len(words) else max(line_end, t + 0.01)
+        if position >= nxt:
+            done += length
+        elif position > t:
+            done += length * (position - t) / max(nxt - t, 1e-6)
+            break
+        else:
+            break
+    return max(0.0, min(1.0, done / total))
+
+
 def current_line_index(lines, position):
     idx = -1
     for i, (t, _) in enumerate(lines):
@@ -31,16 +79,19 @@ def current_line_index(lines, position):
 
 @dataclass
 class Lyrics:
-    synced: list | None
+    synced: list | None            # [(time, text)]
     plain: str | None
     instrumental: bool = False
     source: str = "none"
+    words: list | None = None      # parallel to synced: [(time, word)] per line, or None
 
 
 def lyrics_from_response(data):
     synced_text = data.get("syncedLyrics")
+    enhanced = parse_enhanced_lrc(synced_text) if synced_text else []
     return Lyrics(
-        synced=parse_lrc(synced_text) if synced_text else None,
+        synced=[(t, text) for t, text, _ in enhanced] if enhanced else None,
+        words=[w for _, _, w in enhanced] if enhanced else None,
         plain=data.get("plainLyrics") or None,
         instrumental=bool(data.get("instrumental")),
         source=data.get("source") or "none",

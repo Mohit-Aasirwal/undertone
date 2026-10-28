@@ -96,3 +96,41 @@ class LrclibSearchUrl(unittest.TestCase):
         self.assertTrue(url.startswith("https://lrclib.net/api/search?"))
         self.assertIn("track_name=Silvera", url)
         self.assertIn("artist_name=Gojira", url)
+
+
+from undertone.lyrics import parse_enhanced_lrc, word_progress  # noqa: E402
+
+
+class ParseEnhancedLrc(unittest.TestCase):
+    def test_plain_synced_lines_have_no_words(self):
+        self.assertEqual(parse_enhanced_lrc("[00:01.00] hello world\n"), [(1.0, "hello world", None)])
+
+    def test_word_timestamps_are_extracted_with_clean_text(self):
+        text = "[00:10.00] <00:10.00> Hello <00:10.50> big <00:11.20> world\n"
+        self.assertEqual(parse_enhanced_lrc(text),
+                         [(10.0, "Hello big world", [(10.0, "Hello"), (10.5, "big"), (11.2, "world")])])
+
+    def test_mixed_files_keep_order_and_skip_metadata(self):
+        text = "[ti:x]\n[00:05.00] <00:05.00> a <00:05.50> b\n[00:02.00] plain\n"
+        parsed = parse_enhanced_lrc(text)
+        self.assertEqual([p[0] for p in parsed], [2.0, 5.0])
+        self.assertIsNone(parsed[0][2])
+        self.assertEqual(parsed[1][1], "a b")
+
+
+class WordProgress(unittest.TestCase):
+    words = [(10.0, "Hello"), (10.5, "big"), (11.2, "world")]
+
+    def test_before_first_word_is_zero_and_after_last_is_one(self):
+        self.assertEqual(word_progress(self.words, 9.0, line_end=12.0), 0.0)
+        self.assertEqual(word_progress(self.words, 12.5, line_end=12.0), 1.0)
+
+    def test_progress_is_character_weighted_and_interpolates_within_a_word(self):
+        total = len("Hello big world")
+        # at 10.5 exactly "Hello " is done: 6 of 15 characters
+        self.assertAlmostEqual(word_progress(self.words, 10.5, line_end=12.0), 6 / total, places=3)
+        # halfway through "big" (10.5..11.2) adds half of "big " (4 chars)
+        self.assertAlmostEqual(word_progress(self.words, 10.85, line_end=12.0), (6 + 2) / total, places=3)
+
+    def test_no_words_means_fully_sung(self):
+        self.assertEqual(word_progress(None, 10.0, line_end=12.0), 1.0)
