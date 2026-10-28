@@ -21,8 +21,9 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango, PangoCairo  # n
 from . import __version__  # noqa: E402
 from .layout import CONFIG_PATH, load_config, resolve_box, select_monitors, window_config_for  # noqa: E402
 from .lyrics import current_line_index, lyrics_from_response, word_progress  # noqa: E402
-from .sources import fetch_chain  # noqa: E402
+from .sources import EMPTY, fetch_chain  # noqa: E402
 from .translate import translate_lines  # noqa: E402
+from .backdrop import ken_burns_scale  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -43,6 +44,8 @@ AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
 OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
 DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 DEFAULT_TRANSLATION = {"enabled": False, "target": "hi"}
+DEFAULT_BACKDROP = {"motion": True}
+MOTION_MS = 500
 TRANSLATION_CACHE = os.path.join(CACHE_DIR, "translations.json")
 
 
@@ -96,6 +99,9 @@ def fetch_lyrics(track, sources=DEFAULT_LYRICS["sources"], local_dirs=DEFAULT_LY
         data = read_local(track, local_dirs)
         if data:
             return lyrics_from_response(data)
+    remote = [x for x in sources if x != "local"]
+    if not remote:
+        return lyrics_from_response(dict(EMPTY))
     if os.path.exists(path):
         with open(path) as f:
             data = json.load(f)
@@ -103,7 +109,7 @@ def fetch_lyrics(track, sources=DEFAULT_LYRICS["sources"], local_dirs=DEFAULT_LY
         data.setdefault("source", "lrclib" if (data.get("syncedLyrics") or data.get("plainLyrics")
                                                or data.get("instrumental")) else "none")
         return lyrics_from_response(data)
-    data = fetch_chain(track, [x for x in sources if x != "local"], local_dirs)
+    data = fetch_chain(track, remote, local_dirs)
     with open(path, "w") as f:
         json.dump(data, f)
     return lyrics_from_response(data)
@@ -181,8 +187,11 @@ class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
-                 translation=None):
+                 translation=None, backdrop=None):
         self.windows = windows
+        self.backdrop = {**DEFAULT_BACKDROP, **(backdrop or {})}
+        self.kb_scale = 1.0
+        self.started_at = time.monotonic()
         self.lyrics_cfg = {**DEFAULT_LYRICS, **(lyrics_cfg or {})}
         self.translation = {**DEFAULT_TRANSLATION, **(translation or {})}
         self.translations = None  # list parallel to lyrics.synced (or plain lines), or None
@@ -208,6 +217,10 @@ class Playback:
             "SetGlobalOffset": self.set_global_offset, "Status": self.status,
         })
         GLib.timeout_add(POLL_MS, self.poll)
+        if audio:
+            GLib.timeout_add(FRAME_MS, self.animate)
+        if self.backdrop["motion"]:
+            GLib.timeout_add(MOTION_MS, self.drift)
 
     # ---- control surface -------------------------------------------------
     def set_hidden(self, hidden):
@@ -250,13 +263,20 @@ class Playback:
                        "instrumental" if self.lyrics.instrumental else "none"),
             "lyrics_source": self.lyrics.source if self.lyrics else None,
             "translated": self.translations is not None,
+            "backdrop_scale": round(self.kb_scale, 4),
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
             "pulse": round(self.audio.pulse, 3) if self.audio else None,
         }
-        if audio:
-            GLib.timeout_add(FRAME_MS, self.animate)
+
+    def drift(self):
+        """Advance the backdrop zoom and repaint whole windows; between ticks every partial redraw
+        reuses the same scale, so the moving centre never tears against the static edges."""
+        if self.track:
+            self.kb_scale = ken_burns_scale(time.monotonic() - self.started_at)
+            self.redraw()
+        return True
 
     def animate(self):
         if self.track:
@@ -272,6 +292,7 @@ class Playback:
             self.pos, self.pos_at = pos, now
             if self.track is None or track.key != self.track.key:
                 self.track, self.lyrics, self.art, self.translations = track, None, None, None
+                self.started_at = now
                 self.loading = True
                 threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
             for win in self.windows:
@@ -473,6 +494,11 @@ class Lightbox(Gtk.Window):
             self.bg_cache = (key, surface)
         cr.save()
         cr.identity_matrix()
+        k = self.state.kb_scale
+        if k != 1.0:
+            cr.translate(dw / 2, dh / 2)
+            cr.scale(k, k)
+            cr.translate(-dw / 2, -dh / 2)
         cr.set_source_surface(self.bg_cache[1], 0, 0)
         cr.paint()
         cr.restore()
@@ -499,10 +525,17 @@ class Lightbox(Gtk.Window):
         cr.paint()
 
     def ring_geometry(self, w, h):
+        if self.full_visual():  # nothing to read: give the visualizer the whole area
+            cx, cy = w / 2, h / 2
+            return cx, cy, min(w / 2, h / 2) - 40
         top = 230
         cx, cy = w / 2, top + (h - top) / 2
         max_r = min(w / 2, h - cy, cy) - 30
         return cx, cy, max_r
+
+    def full_visual(self):
+        ly = self.lyrics
+        return bool(self.track) and not self.loading and ly is not None and not (ly.synced or ly.plain)
 
     def ring_bounds(self):
         """Device-pixel rectangle the rings can touch; the per-frame redraw is clipped to it."""
@@ -612,7 +645,8 @@ class Lightbox(Gtk.Window):
         layout.set_text(text, -1)
         tw, th = layout.get_pixel_size()
         cr.set_source_rgba(1, 1, 1, 0.45)
-        cr.move_to((w - tw) / 2, (h - th) / 2)
+        ny = h - th - 48 if self.full_visual() else (h - th) / 2  # keep the centre for the visualizer
+        cr.move_to((w - tw) / 2, ny)
         PangoCairo.show_layout(cr, layout)
 
 
@@ -697,7 +731,7 @@ def main(argv=None):
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
-                     config.get("translation"))
+                     config.get("translation"), config.get("backdrop"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

@@ -64,3 +64,7 @@ local_dirs = ["~/Music"]
 enabled = false
 # Target language code: "hi", "es", "ja", "fr", ...
 target = "hi"
+
+[backdrop]
+# Slow zoom on the album-art backdrop (40 s in, 40 s out).
+motion = true
