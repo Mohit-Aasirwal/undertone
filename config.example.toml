@@ -74,3 +74,10 @@ motion = true
 # drop back to the desktop layer as soon as you touch the mouse or keyboard.
 enabled = false
 idle_minutes = 10
+
+[web]
+# Shared listening page: open http://<this-machine>:<port>/ on a phone or laptop on the same network
+# to follow the lyrics live. Off by default. Use bind = "127.0.0.1" to keep it local.
+enabled = false
+port = 8765
+bind = "0.0.0.0"

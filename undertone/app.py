@@ -26,6 +26,7 @@ from .translate import translate_lines  # noqa: E402
 from .backdrop import ken_burns_scale  # noqa: E402
 from .idle import Screensaver, idle_seconds  # noqa: E402
 from .stats import DB_PATH, MIN_PLAY_S, History, format_report  # noqa: E402
+from .web import NowPlayingServer, snapshot_payload  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -48,6 +49,7 @@ DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 DEFAULT_TRANSLATION = {"enabled": False, "target": "hi"}
 DEFAULT_BACKDROP = {"motion": True}
 DEFAULT_SCREENSAVER = {"enabled": False, "idle_minutes": 10}
+DEFAULT_WEB = {"enabled": False, "port": 8765, "bind": "0.0.0.0"}
 IDLE_POLL_MS = 2000
 MOTION_MS = 500
 TRANSLATION_CACHE = os.path.join(CACHE_DIR, "translations.json")
@@ -191,8 +193,17 @@ class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
-                 translation=None, backdrop=None, screensaver=None, history_path=DB_PATH):
+                 translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None):
         self.windows = windows
+        self.art_png = None  # PNG bytes of the current art for the web page
+        web = {**DEFAULT_WEB, **(web or {})}
+        self.web = None
+        if web["enabled"]:
+            try:
+                self.web = NowPlayingServer(web["bind"], int(web["port"]), self.web_payload, self.web_art)
+                self.web.start()
+            except OSError as e:
+                print(f"web page disabled: cannot listen on {web['bind']}:{web['port']} ({e})", file=sys.stderr)
         self.history = History(history_path)
         self.played_s = 0.0  # seconds of the current track actually heard
         self.last_tick = None
@@ -290,11 +301,32 @@ class Playback:
             "backdrop_scale": round(self.kb_scale, 4),
             "screensaver": self.raised,
             "played_s": round(self.played_s),
+            "web": f"http://{self.web.httpd.server_address[0]}:{self.web.port}/" if self.web else None,
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
             "pulse": round(self.audio.pulse, 3) if self.audio else None,
         }
+
+    def lines_and_idx(self):
+        """Lyric lines and the current index, independent of any window (shared by the web page)."""
+        ly = self.lyrics
+        if not self.track or ly is None:
+            return [], -1
+        if ly.synced:
+            return [t for _, t in ly.synced], current_line_index(ly.synced, self.position())
+        if ly.plain:
+            lines = ly.plain.splitlines()
+            frac = self.position() / max(self.track.length_us / 1_000_000, 1)
+            return lines, min(int(frac * len(lines)), len(lines) - 1)
+        return [], -1
+
+    def web_payload(self):
+        lines, idx = self.lines_and_idx()
+        return snapshot_payload(self.status(), lines, idx, self.art_png is not None, self.translations)
+
+    def web_art(self):
+        return (self.art_png, "image/png") if self.art_png else None
 
     def finish_play(self):
         """Log the track that just ended if it was listened to for long enough to count."""
@@ -364,7 +396,11 @@ class Playback:
                 palette = palette_from_pixbuf(art)
             except Exception as e:
                 print("palette extraction failed:", e, file=sys.stderr)
-        GLib.idle_add(self.apply_loaded, track, lyrics, art, palette)
+        png = None
+        if art is not None and self.web is not None:
+            ok, data = art.save_to_bufferv("png", [], [])
+            png = bytes(data) if ok else None
+        GLib.idle_add(self.apply_loaded, track, lyrics, art, palette, png)
         if lyrics and self.translation["enabled"] and (lyrics.synced or lyrics.plain):
             lines = [t for _, t in lyrics.synced] if lyrics.synced else lyrics.plain.splitlines()
             translated = translate_lines(lines, self.translation["target"], TRANSLATION_CACHE)
@@ -383,9 +419,10 @@ class Playback:
             threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
         return False
 
-    def apply_loaded(self, track, lyrics, art, palette=None):
+    def apply_loaded(self, track, lyrics, art, palette=None, png=None):
         if self.track and self.track.key == track.key:
             self.lyrics, self.art, self.loading = lyrics, art, False
+            self.art_png = png
             if self.theme_source == "art":
                 self.theme = palette or {"accent": FALLBACK_ACCENT, "base": FALLBACK_BASE}
             if lyrics is None:
@@ -800,7 +837,7 @@ def main(argv=None):
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
                      config.get("translation"), config.get("backdrop"), config.get("screensaver"),
-                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH)
+                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
