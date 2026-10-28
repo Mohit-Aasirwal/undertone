@@ -6,6 +6,7 @@ import math
 import random
 from dataclasses import dataclass
 
+import cairo
 import numpy as np
 
 from .visualizer import ring_radii
@@ -78,15 +79,37 @@ def _tint(accent, level):
 
 
 def draw_rings(cr, cx, cy, max_r, levels, pulse, accent, opacity, state):
+    """Concentric rings with a translucent gradient filling each annulus, brightest at the ring line."""
     n = len(levels)
     base = max_r * 0.22
     spacing = (max_r - base) / max(n, 1)
     kick = pulse * spacing * 0.5
-    for r, level in zip(ring_radii(levels, base + kick, spacing, spacing * 0.9), levels):
-        cr.set_source_rgba(*_tint(accent, level), opacity * (0.35 + 0.65 * float(level)))
+    radii = [min(float(r), max_r) for r in ring_radii(levels, base + kick, spacing, spacing * 0.9)]
+    cr.save()
+    cr.set_fill_rule(cairo.FILL_RULE_EVEN_ODD)
+    for i in range(n - 1, -1, -1):
+        r_out = radii[i]
+        r_in = radii[i - 1] if i > 0 else max(base * 0.35, 1.0)
+        if r_out <= r_in + 0.5:
+            continue
+        level = float(levels[i])
+        col = _tint(accent, level)
+        grad = cairo.RadialGradient(cx, cy, r_in, cx, cy, r_out)
+        grad.add_color_stop_rgba(0.0, *col, opacity * 0.04 * (0.4 + level))
+        grad.add_color_stop_rgba(0.75, *col, opacity * 0.16 * (0.4 + level))
+        grad.add_color_stop_rgba(1.0, *col, opacity * 0.55 * (0.4 + level))
+        cr.set_source(grad)
+        cr.new_sub_path()
+        cr.arc(cx, cy, r_out, 0, 2 * math.pi)
+        cr.new_sub_path()
+        cr.arc(cx, cy, r_in, 0, 2 * math.pi)
+        cr.fill()
+    cr.restore()
+    for r, level in zip(radii, levels):
+        cr.set_source_rgba(*_tint(accent, level), opacity * (0.45 + 0.75 * float(level)))
         cr.set_line_width(1.0 + 2.5 * float(level))
         cr.new_sub_path()
-        cr.arc(cx, cy, min(float(r), max_r), 0, 2 * math.pi)
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
         cr.stroke()
 
 

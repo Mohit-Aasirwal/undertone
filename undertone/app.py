@@ -147,8 +147,12 @@ class AudioLevels:
         self.levels = np.zeros(n_bands)
         self.reference = 1e-6
         self.detector = OnsetDetector(self.RATE / self.FRAME)
+        freqs = np.linspace(0, self.RATE / 2, self.FRAME // 2 + 1)
+        self.bass_bins = (freqs >= 40) & (freqs < 150)
+        self.bass_ref = 1e-9
         self.pulse = 0.0
         self.bpm = 0
+        self.capture_state = "starting"
         self.lock = threading.Lock()
         threading.Thread(target=self.run, daemon=True).start()
 
@@ -163,7 +167,9 @@ class AudioLevels:
                 proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             except FileNotFoundError:
                 print("parec not found; visualizer disabled", file=sys.stderr)
+                self.capture_state = "parec missing"
                 return
+            self.capture_state = "running"
             while True:
                 buf = proc.stdout.read(self.FRAME * 4)
                 if len(buf) < self.FRAME * 4:
@@ -173,15 +179,20 @@ class AudioLevels:
                 # slowly decaying running peak so quiet passages still move the rings
                 self.reference = max(float(mag.max()), self.reference * 0.995, 1e-6)
                 new = band_levels(mag, self.RATE, self.n_bands, reference=self.reference)
-                bass = float(np.mean(new[: max(1, self.n_bands // 4)]))
-                self.detector.feed(bass)
+                # beats come from linear bass energy against its own slow peak: the dB-scaled bands
+                # that drive the visuals compress a kick's jump too much for real music
+                bass = float(np.mean(mag[self.bass_bins]))
+                self.bass_ref = max(bass, self.bass_ref * 0.995, 1e-9)
+                self.detector.feed(bass / self.bass_ref)
                 with self.lock:
                     self.levels = smooth_levels(self.levels, new, attack=0.6, decay=0.12)
                     self.pulse, self.bpm = self.detector.pulse(), self.detector.tempo_bpm()
             proc.wait()
+            self.capture_state = f"exited ({proc.returncode}), retrying"
             with self.lock:
                 self.levels, self.pulse, self.bpm = np.zeros(self.n_bands), 0.0, 0
             if override:
+                self.capture_state = "test feed ended"
                 return  # a test feed ended; nothing to reconnect to
             time.sleep(2)  # sink went away or parec died: retry
 
@@ -197,6 +208,7 @@ class Playback:
                  translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None):
         self.windows = windows
         self.art_png = None  # PNG bytes of the current art for the web page
+        self.fps_mark = (time.monotonic(), [0] * len(windows))
         web = {**DEFAULT_WEB, **(web or {})}
         self.web = None
         if web["enabled"]:
@@ -287,6 +299,11 @@ class Playback:
 
     def status(self):
         t = self.track
+        now = time.monotonic()
+        then, counts = self.fps_mark
+        fps = [round((w.frames - c) / max(now - then, 1e-6), 1) for w, c in zip(self.windows, counts)]
+        self.fps_mark = (now, [w.frames for w in self.windows])
+        audio = self.audio.snapshot() if self.audio else None
         return {
             "visible": any(w.get_visible() for w in self.windows),
             "hidden_by_user": self.hidden_by_user,
@@ -307,6 +324,9 @@ class Playback:
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
             "pulse": round(self.audio.pulse, 3) if self.audio else None,
+            "audio_level": round(float(np.mean(audio["levels"])), 3) if audio is not None and len(audio["levels"]) else None,
+            "audio_capture": self.audio.capture_state if self.audio else None,
+            "fps": fps,
         }
 
     def lines_and_idx(self):
@@ -349,7 +369,11 @@ class Playback:
     def animate(self):
         if self.track:
             for win in self.windows:
-                win.area.queue_draw_area(*win.ring_bounds())
+                if win.scroll:
+                    win.area.queue_draw()
+                else:
+                    win.area.queue_draw_area(*win.ring_bounds())
+                    win.area.queue_draw_area(*win.current_line_bounds())
         return True
 
     def poll(self):
@@ -480,6 +504,10 @@ class Lightbox(Gtk.Window):
         self.add(self.area)
         self.state = None
         self.cur_extent = (0, 0)  # x and width of the current line's ink, reference coordinates
+        self.frames = 0  # draw calls, for the fps readout in status
+        self.static_cache = None  # (key, surface): glass panels + header, never scrolls
+        self.line_pos = {}        # line index -> vertical centre in the most recent layout
+        self.scroll = None        # {"start": t, "delta": px} while lines glide to the new current line
         self.bg_cache = None    # (key, surface) of the dimmed art backdrop
         self.text_cache = None  # (key, surface) of header + lyrics; re-rendered when the line changes
 
@@ -518,6 +546,7 @@ class Lightbox(Gtk.Window):
 
     # ---- drawing ---------------------------------------------------------
     def on_draw(self, widget, cr):
+        self.frames += 1
         # Draw in 1080p reference coordinates; one transform scales fonts and spacing together.
         cr.scale(self.scale, self.scale)
         w, h = widget.get_allocated_width() / self.scale, widget.get_allocated_height() / self.scale
@@ -548,31 +577,64 @@ class Lightbox(Gtk.Window):
             return (None, lines, min(int(frac * len(lines)), len(lines) - 1), False)
         return ("No lyrics found", None, -1, False)
 
+    LYRICS_TOP, LYRICS_MARGIN = 230, 160
+    SCROLL_S = 0.38
+
     def draw_text_layer(self, cr, w, h, pulse=0.0):
-        """Header and non-current lines from one cache; the current line from its own, scaled by the beat."""
+        """Three cached layers: static glass + header; the other lines (glide on line change);
+        the current line (beat-scaled, karaoke-clipped)."""
         dw, dh = round(w * self.scale), round(h * self.scale)
         notice, lines, idx, highlight = self.lyrics_content()
-        key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh, self.theme["accent"],
-               id(self.translations))
+        skey = (self.track.key, id(self.art), dw, dh, self.theme["accent"], bool(notice), self.full_visual())
+        if not self.static_cache or self.static_cache[0] != skey:
+            surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
+            sc = cairo.Context(surface)
+            sc.scale(self.scale, self.scale)
+            if not self.full_visual():
+                self.draw_glass_panel(sc, w, h)
+            self.draw_header(sc, w)
+            if notice:
+                self.draw_notice(sc, w, h, notice)
+            self.static_cache = (skey, surface)
+        cr.save()
+        cr.identity_matrix()
+        cr.set_source_surface(self.static_cache[1], 0, 0)
+        cr.paint()
+        cr.restore()
+        if notice:
+            return
+
+        key = (self.track.key, id(self.lyrics), idx, dw, dh, self.theme["accent"], id(self.translations))
         if not self.text_cache or self.text_cache[0] != key:
+            prev = self.text_cache
+            self.line_pos = {}
             surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
             tc = cairo.Context(surface)
             tc.scale(self.scale, self.scale)
-            self.draw_header(tc, w)
-            cur_surface, cur_cy = None, 0
-            if notice:
-                self.draw_notice(tc, w, h, notice)
-            else:
-                cur_cy = self.draw_lyrics(tc, w, h, lines, idx, highlight, part="others")
-                if highlight and idx >= 0:
-                    cur_surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
-                    cc = cairo.Context(cur_surface)
-                    cc.scale(self.scale, self.scale)
-                    self.draw_lyrics(cc, w, h, lines, idx, highlight, part="current")
-            self.text_cache = (key, surface, cur_surface, cur_cy, self.cur_extent)
-        _, surface, cur_surface, cur_cy, (ex0, ew) = self.text_cache
+            cur_cy = self.draw_lyrics(tc, w, h, lines, idx, highlight, part="others")
+            cur_surface = None
+            if highlight and idx >= 0:
+                cur_surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
+                cc = cairo.Context(cur_surface)
+                cc.scale(self.scale, self.scale)
+                self.draw_lyrics(cc, w, h, lines, idx, highlight, part="current")
+            # same track and lyrics, new line: glide from where the new line sat in the old layout
+            if prev and prev[0][:2] == key[:2] and idx in prev[5] and highlight:
+                self.scroll = {"start": time.monotonic(), "delta": prev[5][idx] - prev[3]}
+            self.text_cache = (key, surface, cur_surface, cur_cy, self.cur_extent, dict(self.line_pos))
+        _, surface, cur_surface, cur_cy, (ex0, ew), _ = self.text_cache
+
+        offset = 0.0
+        if self.scroll:
+            p = min(1.0, (time.monotonic() - self.scroll["start"]) / self.SCROLL_S)
+            offset = self.scroll["delta"] * (1 - p) ** 3  # ease-out: fast start, soft landing
+            if p >= 1.0:
+                self.scroll = None
         cr.save()
         cr.identity_matrix()
+        cr.rectangle(0, self.LYRICS_TOP * self.scale, dw, dh)  # never glide over the header
+        cr.clip()
+        cr.translate(0, offset * self.scale)
         cr.set_source_surface(surface, 0, 0)
         cr.paint()
         if cur_surface is not None:
@@ -591,6 +653,39 @@ class Lightbox(Gtk.Window):
                 cr.clip()
                 cr.paint()
         cr.restore()
+
+    def current_line_bounds(self):
+        """Device-pixel band around the current line, repainted every frame for the beat scale."""
+        cy = self.text_cache[3] if self.text_cache else 0
+        band = 70
+        return (0, int((cy - band) * self.scale), int(self.area.get_allocated_width()), int(2 * band * self.scale) + 2)
+
+    def draw_glass_panel(self, cr, w, h):
+        """Frosted card behind the lyrics column and a chip behind the header."""
+        ar, ag, ab = self.theme["accent"]
+        for (x, y, pw, ph, r) in ((self.LYRICS_MARGIN - 48, self.LYRICS_TOP - 14, w - 2 * (self.LYRICS_MARGIN - 48),
+                                   h - self.LYRICS_TOP - 26, 30), (40, 40, 620, 152, 24)):
+            rounded_rect(cr, x, y, pw, ph, r)
+            fill = cairo.LinearGradient(0, y, 0, y + ph)
+            fill.add_color_stop_rgba(0, 1, 1, 1, 0.085)
+            fill.add_color_stop_rgba(1, 1, 1, 1, 0.035)
+            cr.set_source_rgba(0.02, 0.02, 0.04, 0.22)
+            cr.fill_preserve()
+            cr.set_source(fill)
+            cr.fill_preserve()
+            cr.set_source_rgba(1, 1, 1, 0.13)
+            cr.set_line_width(1.0)
+            cr.stroke()
+            # specular highlight along the top edge, faintly tinted by the accent
+            hl = cairo.LinearGradient(x, 0, x + pw, 0)
+            hl.add_color_stop_rgba(0, 1, 1, 1, 0)
+            hl.add_color_stop_rgba(0.5, 0.6 + 0.4 * ar, 0.6 + 0.4 * ag, 0.6 + 0.4 * ab, 0.35)
+            hl.add_color_stop_rgba(1, 1, 1, 1, 0)
+            cr.set_source(hl)
+            cr.set_line_width(1.5)
+            cr.move_to(x + r, y + 1)
+            cr.line_to(x + pw - r, y + 1)
+            cr.stroke()
 
     def karaoke_progress(self, idx):
         ly = self.lyrics
@@ -691,7 +786,7 @@ class Lightbox(Gtk.Window):
     def draw_lyrics(self, cr, w, h, lines, idx, highlight, part="all"):
         """Draw lines centred on the current one. `part` selects "all", "others" or just "current".
         Returns the current line's vertical centre."""
-        top, margin = 230, 160
+        top, margin = self.LYRICS_TOP, self.LYRICS_MARGIN
         centre_y = top + (h - top) / 2
         layout = PangoCairo.create_layout(cr)
         layout.set_alignment(Pango.Alignment.CENTER)
@@ -714,6 +809,7 @@ class Lightbox(Gtk.Window):
             yy -= hh + gap
             if yy + hh < top:
                 break
+            self.line_pos[i] = yy + hh / 2
             if part != "current":
                 self.draw_line(cr, layout, lines[i], margin, yy, False, highlight, (y - yy) / (centre_y - top))
         # current and below
@@ -722,6 +818,7 @@ class Lightbox(Gtk.Window):
             if yy > h:
                 break
             hh = height_of(i)
+            self.line_pos[i] = yy + hh / 2
             is_cur = highlight and i == idx
             if part == "all" or (part == "current") == is_cur:
                 self.draw_line(cr, layout, lines[i], margin, yy, is_cur, highlight, (yy - y) / (h - centre_y))
@@ -748,6 +845,11 @@ class Lightbox(Gtk.Window):
         if is_cur:
             ink, _logical = layout.get_pixel_extents()
             self.cur_extent = (x + ink.x, ink.width)
+            # soft glow: the accent at low alpha, offset around the glyphs, then the crisp line on top
+            cr.set_source_rgba(*self.theme["accent"], 0.22)
+            for dx, dy in ((0, 2.5), (2.5, 0), (0, -2.5), (-2.5, 0), (1.8, 1.8), (-1.8, -1.8)):
+                cr.move_to(x + dx, y + dy)
+                PangoCairo.show_layout(cr, layout)
             cr.set_source_rgba(*self.theme["accent"], 1.0)
         elif highlight:
             cr.set_source_rgba(1, 1, 1, max(0.12, 0.55 - 0.45 * min(dist, 1.0)))

@@ -26,7 +26,7 @@ Undertone turns your desktop into a lyrics lightbox whenever music plays. It sit
 Debian, Ubuntu, Mint: download the `.deb` from the [latest release](https://github.com/Mohit-Aasirwal/undertone/releases) and install it:
 
 ```bash
-sudo apt install ./undertone_1.0.0_all.deb
+sudo apt install ./undertone_1.1.0_all.deb
 ```
 
 From source on any distro with `pipx`:

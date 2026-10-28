@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 — 2026-10-28
+
+- Beat detection now works on real music: onsets come from linear bass energy instead of the
+  dB-scaled bands, which compressed a kick's jump so much that almost nothing fired.
+- Fixed a visible seam on the current line: the per-frame redraw covered only the ring area, so the
+  beat-scaled line was repainted at two different scales. The redraw now covers the line's band too.
+- Lines glide upward on a line change (ease-out, 380 ms) instead of jumping.
+- Glassmorphic look: a frosted card behind the lyrics, a chip behind the header, a specular edge
+  tinted by the accent, and a soft glow on the current line.
+- Rings mode fills each annulus with a translucent radial gradient that brightens toward the ring.
+- `undertone ctl status` reports `fps` per window, `audio_level` and `audio_capture`.
+
 ## 1.0.0 — 2026-10-28
 
 A major release: everything below is new since 0.1.0.
