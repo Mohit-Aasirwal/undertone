@@ -58,3 +58,9 @@ source = "art"
 #   "netease" music.163.com (synced lyrics, best effort; blocked in some regions)
 sources = ["local", "lrclib", "netease"]
 local_dirs = ["~/Music"]
+
+[translation]
+# Show a faint translation under the current line (uses Google Translate's public web endpoint).
+enabled = false
+# Target language code: "hi", "es", "ja", "fr", ...
+target = "hi"

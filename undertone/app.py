@@ -22,6 +22,7 @@ from . import __version__  # noqa: E402
 from .layout import CONFIG_PATH, load_config, resolve_box, select_monitors, window_config_for  # noqa: E402
 from .lyrics import current_line_index, lyrics_from_response, word_progress  # noqa: E402
 from .sources import fetch_chain  # noqa: E402
+from .translate import translate_lines  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -41,6 +42,8 @@ USER_AGENT = f"undertone/{__version__} (https://github.com/Mohit-Aasirwal/undert
 AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
 OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
 DEFAULT_THEME = {"source": "art"}  # art | gtk | none
+DEFAULT_TRANSLATION = {"enabled": False, "target": "hi"}
+TRANSLATION_CACHE = os.path.join(CACHE_DIR, "translations.json")
 
 
 class Mpris:
@@ -177,9 +180,12 @@ class AudioLevels:
 class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
-    def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None):
+    def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
+                 translation=None):
         self.windows = windows
         self.lyrics_cfg = {**DEFAULT_LYRICS, **(lyrics_cfg or {})}
+        self.translation = {**DEFAULT_TRANSLATION, **(translation or {})}
+        self.translations = None  # list parallel to lyrics.synced (or plain lines), or None
         self.audio = audio
         self.vis_mode = vis_mode if vis_mode in MODES else MODES[0]
         self.theme_source = (theme or DEFAULT_THEME)["source"]
@@ -243,6 +249,7 @@ class Playback:
                        "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
                        "instrumental" if self.lyrics.instrumental else "none"),
             "lyrics_source": self.lyrics.source if self.lyrics else None,
+            "translated": self.translations is not None,
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
@@ -264,7 +271,7 @@ class Playback:
             self.last_playing_at = now
             self.pos, self.pos_at = pos, now
             if self.track is None or track.key != self.track.key:
-                self.track, self.lyrics, self.art = track, None, None
+                self.track, self.lyrics, self.art, self.translations = track, None, None, None
                 self.loading = True
                 threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
             for win in self.windows:
@@ -295,6 +302,18 @@ class Playback:
             except Exception as e:
                 print("palette extraction failed:", e, file=sys.stderr)
         GLib.idle_add(self.apply_loaded, track, lyrics, art, palette)
+        if lyrics and self.translation["enabled"] and (lyrics.synced or lyrics.plain):
+            lines = [t for _, t in lyrics.synced] if lyrics.synced else lyrics.plain.splitlines()
+            translated = translate_lines(lines, self.translation["target"], TRANSLATION_CACHE)
+            if translated is None:
+                print("translation unavailable", file=sys.stderr)
+            GLib.idle_add(self.apply_translation, track, translated)
+
+    def apply_translation(self, track, translated):
+        if self.track and self.track.key == track.key:
+            self.translations = translated
+            self.redraw()
+        return False
 
     def retry_for(self, track):
         if self.track and self.track.key == track.key and self.lyrics is None:
@@ -351,6 +370,7 @@ class Lightbox(Gtk.Window):
 
     track = property(lambda self: self.state.track)
     theme = property(lambda self: self.state.theme)
+    translations = property(lambda self: self.state.translations)
     lyrics = property(lambda self: self.state.lyrics)
     art = property(lambda self: self.state.art)
     loading = property(lambda self: self.state.loading)
@@ -394,7 +414,8 @@ class Lightbox(Gtk.Window):
         """Header and non-current lines from one cache; the current line from its own, scaled by the beat."""
         dw, dh = round(w * self.scale), round(h * self.scale)
         notice, lines, idx, highlight = self.lyrics_content()
-        key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh, self.theme["accent"])
+        key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh, self.theme["accent"],
+               id(self.translations))
         if not self.text_cache or self.text_cache[0] != key:
             surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
             tc = cairo.Context(surface)
@@ -555,7 +576,21 @@ class Lightbox(Gtk.Window):
             if part == "all" or (part == "current") == is_cur:
                 self.draw_line(cr, layout, lines[i], margin, yy, is_cur, highlight, (yy - y) / (h - centre_y))
             yy += hh + gap
+            if is_cur and part != "current":
+                yy += self.draw_translation(cr, layout, i, margin, yy)
         return y + height_of(cur) / 2
+
+    def draw_translation(self, cr, layout, i, x, y):
+        """A faint translated line under the current one; returns the height consumed."""
+        tr = self.translations
+        if not tr or i >= len(tr) or not tr[i]:
+            return 0
+        layout.set_font_description(Pango.FontDescription("Sans 20"))
+        layout.set_text(tr[i], -1)
+        cr.set_source_rgba(1, 1, 1, 0.55)
+        cr.move_to(x, y - 8)
+        PangoCairo.show_layout(cr, layout)
+        return layout.get_pixel_size()[1] + 6
 
     def draw_line(self, cr, layout, text, x, y, is_cur, highlight, dist):
         layout.set_font_description(Pango.FontDescription("Sans Bold 34") if is_cur else Pango.FontDescription("Sans 24"))
@@ -661,7 +696,8 @@ def main(argv=None):
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
-    state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"))
+    state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
+                     config.get("translation"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
