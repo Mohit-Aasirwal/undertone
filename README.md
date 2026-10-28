@@ -1,5 +1,9 @@
 # Undertone
 
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-support%20this%20project-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/mohitaasirwal)
+[![Release](https://img.shields.io/github/v/release/Mohit-Aasirwal/undertone?color=7c3aed)](https://github.com/Mohit-Aasirwal/undertone/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Lyrics that live underneath your windows.
 
 Undertone turns your desktop into a lyrics lightbox whenever music plays. It sits on the desktop layer, above the wallpaper and below every window, so it is there when you glance at an empty desktop and out of the way when you are working. Time-synced lyrics scroll with the track, the album art fades in behind them, the colours come from the cover, and the visualizer moves to the beat.
@@ -112,6 +116,29 @@ These are plain D-Bus calls on `org.undertone`, so any launcher or hotkey daemon
 ## How it works
 
 Playback state comes from MPRIS over D-Bus. Lyrics are looked up through the configured source chain and cached. The visualizer streams the default sink's monitor through `parec`, runs a 2048-sample FFT, maps it to log-spaced bands with auto-gain, and feeds the bass band to an onset detector for beats and tempo. Each monitor gets a GTK window on the desktop layer; drawing is cached in layers so two 1080p windows at 30 fps stay under 10% CPU.
+
+## Support the project
+
+Undertone is free, open source, and built by one person on evenings and weekends. If it has made your desktop a nicer place to be, you can keep it moving with a coffee:
+
+<a href="https://ko-fi.com/mohitaasirwal"><img src="https://storage.ko-fi.com/cdn/kofi3.png?v=3" alt="Buy me a coffee on Ko-fi" height="40"></a>
+
+Every tip goes into the roadmap below. A few coffees pay for the lyrics API traffic and a month of test VMs; a lot of them pay for a second monitor and a Wayland box so the features land on every desktop, not just mine. Sponsors get their name in the release notes and a say in what ships next.
+
+### What's next
+
+These are the things that would make Undertone genuinely better, roughly in the order I want to ship them:
+
+- **Flathub listing.** One-click install on every distro. The manifest exists; it needs a build box and a review cycle.
+- **Wayland, verified.** The layer-shell path is written but untested on real compositors. Hyprland, Sway, KDE and GNOME each need a pass.
+- **Smoother sync.** Sub-second position from players that only report once a second, by locking to the beat grid.
+- **Lyrics everywhere.** More sources (Musixmatch community, Genius plain lyrics), romanisation for Japanese and Korean, and an editor to fix timing and push corrections back to LRCLIB.
+- **Themes and layouts.** Font choices, a vertical layout for portrait monitors, and a compact bar mode for the top or bottom edge of the screen.
+- **Visualizer packs.** A small plugin API so anyone can drop in a new mode, with spectrum, oscilloscope and album-art particle modes to start.
+- **Phone companion.** The shared page as a proper PWA with remote control: skip, nudge lyrics, switch visualizer from the sofa.
+- **Windows and macOS.** The core is portable; the window layer and audio capture need native backends.
+
+If one of these matters to you, say so in a [discussion](https://github.com/Mohit-Aasirwal/undertone/discussions) or with your tip. Pull requests are very welcome, and the `help wanted` label marks the places where a second pair of hands helps most.
 
 ## Development
 
