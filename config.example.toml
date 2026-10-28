@@ -68,3 +68,9 @@ target = "hi"
 [backdrop]
 # Slow zoom on the album-art backdrop (40 s in, 40 s out).
 motion = true
+
+[screensaver]
+# After idle_minutes without input, lift the lyrics above all windows as an ambient display;
+# drop back to the desktop layer as soon as you touch the mouse or keyboard.
+enabled = false
+idle_minutes = 10

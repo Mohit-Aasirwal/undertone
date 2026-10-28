@@ -24,6 +24,7 @@ from .lyrics import current_line_index, lyrics_from_response, word_progress  # n
 from .sources import EMPTY, fetch_chain  # noqa: E402
 from .translate import translate_lines  # noqa: E402
 from .backdrop import ken_burns_scale  # noqa: E402
+from .idle import Screensaver, idle_seconds  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -45,6 +46,8 @@ OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
 DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 DEFAULT_TRANSLATION = {"enabled": False, "target": "hi"}
 DEFAULT_BACKDROP = {"motion": True}
+DEFAULT_SCREENSAVER = {"enabled": False, "idle_minutes": 10}
+IDLE_POLL_MS = 2000
 MOTION_MS = 500
 TRANSLATION_CACHE = os.path.join(CACHE_DIR, "translations.json")
 
@@ -187,8 +190,11 @@ class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
-                 translation=None, backdrop=None):
+                 translation=None, backdrop=None, screensaver=None):
         self.windows = windows
+        ss = {**DEFAULT_SCREENSAVER, **(screensaver or {})}
+        self.screensaver = Screensaver(ss["idle_minutes"] if ss["enabled"] else 0, self.set_raised)
+        self.raised = False
         self.backdrop = {**DEFAULT_BACKDROP, **(backdrop or {})}
         self.kb_scale = 1.0
         self.started_at = time.monotonic()
@@ -221,6 +227,20 @@ class Playback:
             GLib.timeout_add(FRAME_MS, self.animate)
         if self.backdrop["motion"]:
             GLib.timeout_add(MOTION_MS, self.drift)
+        if self.screensaver.threshold > 0:
+            GLib.timeout_add(IDLE_POLL_MS, self.check_idle)
+
+    def check_idle(self):
+        self.screensaver.update(idle_seconds())
+        return True
+
+    def set_raised(self, raised):
+        """Screensaver mode: lift the windows above everything while idle, back to the desktop layer after."""
+        self.raised = raised
+        for win in self.windows:
+            win.set_layer(raised)
+            if self.track and not self.hidden_by_user:
+                win.show_all()
 
     # ---- control surface -------------------------------------------------
     def set_hidden(self, hidden):
@@ -264,6 +284,7 @@ class Playback:
             "lyrics_source": self.lyrics.source if self.lyrics else None,
             "translated": self.translations is not None,
             "backdrop_scale": round(self.kb_scale, 4),
+            "screensaver": self.raised,
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
             "bpm": self.audio.bpm if self.audio else None,
@@ -362,13 +383,12 @@ class Lightbox(Gtk.Window):
     def __init__(self, box, scale, visualizer=None):
         super().__init__(title="Undertone")
         self.visualizer = visualizer
-        self.set_type_hint(Gdk.WindowTypeHint.DESKTOP)
         self.set_decorated(False)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.set_accept_focus(False)
-        self.set_keep_below(True)
         self.stick()
+        self.set_layer(raised=False)
         self.set_app_paintable(True)
         screen = self.get_screen()
         if screen.get_rgba_visual():
@@ -388,6 +408,25 @@ class Lightbox(Gtk.Window):
         self.cur_extent = (0, 0)  # x and width of the current line's ink, reference coordinates
         self.bg_cache = None    # (key, surface) of the dimmed art backdrop
         self.text_cache = None  # (key, surface) of header + lyrics; re-rendered when the line changes
+
+    def set_layer(self, raised):
+        """Desktop layer (below everything) normally; a keep-above normal window in screensaver mode.
+        The type hint only takes effect on map, so a mapped window is re-mapped."""
+        was_visible = self.get_visible()
+        if was_visible:
+            self.hide()
+        self.set_type_hint(Gdk.WindowTypeHint.NORMAL if raised else Gdk.WindowTypeHint.DESKTOP)
+        if was_visible:
+            self.show_all()
+        # _NET_WM_STATE hints are sent as client messages once mapped, so set them after the re-map;
+        # the skip/sticky hints are unchanged at the GTK level, so resend them via the GdkWindow
+        self.set_keep_above(raised)
+        self.set_keep_below(not raised)
+        gdk_win = self.get_window()
+        if gdk_win is not None:
+            gdk_win.set_skip_taskbar_hint(True)
+            gdk_win.set_skip_pager_hint(True)
+            gdk_win.stick()
 
     track = property(lambda self: self.state.track)
     theme = property(lambda self: self.state.theme)
@@ -731,7 +770,7 @@ def main(argv=None):
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
-                     config.get("translation"), config.get("backdrop"))
+                     config.get("translation"), config.get("backdrop"), config.get("screensaver"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
