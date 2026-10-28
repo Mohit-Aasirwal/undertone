@@ -37,3 +37,20 @@ class TrackFromMetadata(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlayerFilter(unittest.TestCase):
+    statuses = {"org.mpris.MediaPlayer2.brave.instance1": "Playing", "org.mpris.MediaPlayer2.spotify": "Playing"}
+
+    def test_deny_list_skips_matching_players(self):
+        self.assertEqual(pick_playing(self.statuses, deny=["brave"]), "org.mpris.MediaPlayer2.spotify")
+
+    def test_allow_list_only_accepts_matching_players(self):
+        self.assertEqual(pick_playing(self.statuses, allow=["spotify"]), "org.mpris.MediaPlayer2.spotify")
+        self.assertIsNone(pick_playing(self.statuses, allow=["vlc"]))
+
+    def test_matching_is_case_insensitive_substring(self):
+        self.assertEqual(pick_playing(self.statuses, allow=["SPOT"]), "org.mpris.MediaPlayer2.spotify")
+
+    def test_empty_lists_mean_no_filtering(self):
+        self.assertEqual(pick_playing(self.statuses, allow=[], deny=[]), "org.mpris.MediaPlayer2.brave.instance1")

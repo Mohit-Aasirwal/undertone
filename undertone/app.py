@@ -37,8 +37,9 @@ AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
 
 
 class Mpris:
-    def __init__(self):
+    def __init__(self, allow=None, deny=None):
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.allow, self.deny = allow or [], deny or []
 
     def _props(self, name, prop):
         res = self.bus.call_sync(
@@ -61,7 +62,7 @@ class Mpris:
                 statuses[name] = self._props(name, "PlaybackStatus")
             except GLib.Error:
                 continue
-        name = pick_playing(statuses)
+        name = pick_playing(statuses, self.allow, self.deny)
         if not name:
             return None, 0.0
         try:
@@ -166,10 +167,11 @@ class AudioLevels:
 class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
-    def __init__(self, windows, audio=None):
+    def __init__(self, windows, audio=None, players=None):
         self.windows = windows
         self.audio = audio
-        self.mpris = Mpris()
+        players = players or {}
+        self.mpris = Mpris(players.get("allow"), players.get("deny"))
         self.track = None
         self.lyrics = None
         self.art = None
@@ -512,6 +514,7 @@ def install_autostart():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    GLib.set_prgname("undertone")  # stable WM_CLASS whether run as a script or `python -m undertone`
     if "--help" in argv or "-h" in argv:
         print(USAGE)
         return
@@ -542,7 +545,7 @@ def main(argv=None):
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
-    state = Playback(windows, audio)
+    state = Playback(windows, audio, config.get("players"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

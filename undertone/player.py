@@ -2,9 +2,22 @@
 from dataclasses import dataclass
 
 
-def pick_playing(statuses):
+MPRIS_PREFIX = "org.mpris.MediaPlayer2."
+
+
+def player_allowed(name, allow=None, deny=None):
+    """Case-insensitive substring match on the bus name after the MPRIS prefix."""
+    short = name[len(MPRIS_PREFIX):].lower() if name.startswith(MPRIS_PREFIX) else name.lower()
+    if deny and any(d.lower() in short for d in deny):
+        return False
+    if allow and not any(a.lower() in short for a in allow):
+        return False
+    return True
+
+
+def pick_playing(statuses, allow=None, deny=None):
     for name, status in statuses.items():
-        if status == "Playing":
+        if status == "Playing" and player_allowed(name, allow, deny):
             return name
     return None
 

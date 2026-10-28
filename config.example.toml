@@ -35,3 +35,11 @@ enabled = true
 rings = 10
 # Stroke opacity (0..1). Keep it low for a faint grey look.
 opacity = 0.2
+
+[players]
+# Which MPRIS players count. Case-insensitive substring match on the player's bus name
+# (e.g. "spotify", "brave", "firefox", "vlc"). Empty lists mean every player counts.
+# deny = ["firefox"]          # ignore these players
+# allow = ["spotify", "brave"]  # only these players
+allow = []
+deny = []
