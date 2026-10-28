@@ -23,7 +23,8 @@ from .layout import CONFIG_PATH, load_config, resolve_box, select_monitors, wind
 from .lyrics import (Lyrics, current_line_index, lrclib_search_url, lrclib_url,  # noqa: E402
                      lyrics_from_response, pick_search_result)
 from .player import pick_playing, track_from_metadata  # noqa: E402
-from .visualizer import band_levels, ring_radii, smooth_levels  # noqa: E402
+from .visualizer import band_levels, smooth_levels  # noqa: E402
+from .modes import DRAWERS, MODES  # noqa: E402
 from .control import ControlService, ctl_main  # noqa: E402
 from .beat import OnsetDetector  # noqa: E402
 from .offsets import Offsets  # noqa: E402
@@ -34,12 +35,11 @@ POLL_MS = 250
 HIDE_GRACE_S = 3.0
 RETRY_S = 20.0
 FRAME_MS = 33
-DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2}
+DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2, "mode": "rings"}
 MPRIS_PREFIX = "org.mpris.MediaPlayer2."
 USER_AGENT = f"undertone/{__version__} (https://github.com/Mohit-Aasirwal/undertone)"
 AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
 OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
-MODES = ["rings"]
 DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 
 
@@ -184,9 +184,10 @@ class AudioLevels:
 class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
-    def __init__(self, windows, audio=None, players=None, theme=None):
+    def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings"):
         self.windows = windows
         self.audio = audio
+        self.vis_mode = vis_mode if vis_mode in MODES else MODES[0]
         self.theme_source = (theme or DEFAULT_THEME)["source"]
         self.theme = {"accent": gtk_accent() if self.theme_source == "gtk" else FALLBACK_ACCENT, "base": FALLBACK_BASE}
         players = players or {}
@@ -200,7 +201,7 @@ class Playback:
         self.loading = False
         self.offsets = Offsets(OFFSETS_PATH)
         self.hidden_by_user = False
-        self.vis_mode = MODES[0]
+        self.vis_state = {}  # per-mode scratch (wave phase, particle field)
         self.control = ControlService({
             "Toggle": self.toggle, "Show": lambda: self.set_hidden(False), "Hide": lambda: self.set_hidden(True),
             "CycleVisualizer": self.cycle_visualizer, "Nudge": self.nudge, "SetOffset": self.set_offset,
@@ -371,7 +372,9 @@ class Lightbox(Gtk.Window):
             return
         audio = self.state.audio.snapshot() if self.state.audio else {"levels": [], "pulse": 0.0, "bpm": 0}
         if self.visualizer and self.state.audio:
-            self.draw_rings(cr, w, h, audio["levels"], audio["pulse"])
+            cx, cy, max_r = self.ring_geometry(w, h)
+            DRAWERS[self.state.vis_mode](cr, cx, cy, max_r, audio["levels"], audio["pulse"],
+                                         self.theme["accent"], self.visualizer["opacity"], self.state.vis_state)
         self.draw_text_layer(cr, w, h, audio["pulse"])
 
     def lyrics_content(self):
@@ -477,23 +480,6 @@ class Lightbox(Gtk.Window):
         r = max_r + 4
         return (int((cx - r) * self.scale), int((cy - r) * self.scale),
                 int(2 * r * self.scale) + 2, int(2 * r * self.scale) + 2)
-
-    def draw_rings(self, cr, w, h, levels, pulse=0.0):
-        cx, cy, max_r = self.ring_geometry(w, h)
-        n = len(levels)
-        base = max_r * 0.22
-        spacing = (max_r - base) / max(n, 1)
-        opacity = self.visualizer["opacity"]
-        kick = pulse * spacing * 0.5  # every ring jumps outward on the beat
-        for r, level in zip(ring_radii(levels, base + kick, spacing, spacing * 0.9), levels):
-            ar, ag, ab = self.theme["accent"]
-            mix = 0.5 * float(level)  # grey when quiet, leaning to the accent when loud
-            cr.set_source_rgba(0.85 + (ar - 0.85) * mix, 0.85 + (ag - 0.85) * mix, 0.88 + (ab - 0.88) * mix,
-                               opacity * (0.35 + 0.65 * float(level)))
-            cr.set_line_width(1.0 + 2.5 * float(level))
-            cr.new_sub_path()
-            cr.arc(cx, cy, float(r), 0, 2 * math.pi)
-            cr.stroke()
 
     def draw_header(self, cr, w):
         x, y, size = 64, 56, 120
@@ -663,7 +649,7 @@ def main(argv=None):
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
-    state = Playback(windows, audio, config.get("players"), theme)
+    state = Playback(windows, audio, config.get("players"), theme, vis["mode"])
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
