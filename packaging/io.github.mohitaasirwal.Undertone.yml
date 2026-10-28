@@ -1,0 +1,28 @@
+# Flatpak manifest (untested here: no flatpak-builder on the dev machine).
+# Build: flatpak-builder --user --install build-dir packaging/io.github.mohitaasirwal.Undertone.yml
+app-id: io.github.mohitaasirwal.Undertone
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: undertone
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --share=network                       # lyrics, translations, the shared page
+  - --talk-name=org.mpris.MediaPlayer2.*  # read every player's state
+  - --own-name=org.undertone              # the ctl interface
+  - --filesystem=xdg-music:ro             # local .lrc files
+modules:
+  - name: python3-numpy
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=/app --no-deps numpy
+  - name: undertone
+    buildsystem: simple
+    build-commands:
+      - pip3 install --prefix=/app --no-deps .
+    sources:
+      - type: dir
+        path: ..

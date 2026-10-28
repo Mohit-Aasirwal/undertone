@@ -27,6 +27,7 @@ from .backdrop import ken_burns_scale  # noqa: E402
 from .idle import Screensaver, idle_seconds  # noqa: E402
 from .stats import DB_PATH, MIN_PLAY_S, History, format_report  # noqa: E402
 from .web import NowPlayingServer, snapshot_payload  # noqa: E402
+from .wayland import layer_margins, load_layer_shell, session_type, wants_layer_shell  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -438,7 +439,7 @@ class Playback:
 class Lightbox(Gtk.Window):
     """One full-screen desktop-layer window per monitor; all draw from the shared Playback."""
 
-    def __init__(self, box, scale, visualizer=None):
+    def __init__(self, box, scale, visualizer=None, monitor=None):
         super().__init__(title="Undertone")
         self.visualizer = visualizer
         self.set_decorated(False)
@@ -446,6 +447,21 @@ class Lightbox(Gtk.Window):
         self.set_skip_pager_hint(True)
         self.set_accept_focus(False)
         self.stick()
+        self.layer_shell = load_layer_shell() if wants_layer_shell(session_type(), True) else None
+        if self.layer_shell:
+            # Wayland: a layer-shell surface on this monitor, placed by margins from its top-left corner
+            ls = self.layer_shell
+            ls.init_for_window(self)
+            ls.set_namespace(self, "undertone")
+            ls.set_keyboard_mode(self, ls.KeyboardMode.NONE)
+            ls.set_exclusive_zone(self, -1)
+            if monitor is not None:
+                ls.set_monitor(self, monitor["gdk"])
+                left, top = layer_margins(box, monitor["geom"])
+                ls.set_margin(self, ls.Edge.LEFT, left)
+                ls.set_margin(self, ls.Edge.TOP, top)
+            ls.set_anchor(self, ls.Edge.LEFT, True)
+            ls.set_anchor(self, ls.Edge.TOP, True)
         self.set_layer(raised=False)
         self.set_app_paintable(True)
         screen = self.get_screen()
@@ -468,8 +484,12 @@ class Lightbox(Gtk.Window):
         self.text_cache = None  # (key, surface) of header + lyrics; re-rendered when the line changes
 
     def set_layer(self, raised):
-        """Desktop layer (below everything) normally; a keep-above normal window in screensaver mode.
-        The type hint only takes effect on map, so a mapped window is re-mapped."""
+        """Desktop layer (below everything) normally; above everything in screensaver mode."""
+        if self.layer_shell:
+            ls = self.layer_shell
+            ls.set_layer(self, ls.Layer.TOP if raised else ls.Layer.BACKGROUND)
+            return
+        # X11: the type hint only takes effect on map, so a mapped window is re-mapped
         was_visible = self.get_visible()
         if was_visible:
             self.hide()
@@ -763,7 +783,7 @@ def monitors():
         m = display.get_monitor(i)
         g = m.get_geometry()
         out.append({"index": i, "name": m.get_model() or f"monitor{i}", "primary": m.is_primary(),
-                    "geom": (g.x, g.y, g.width, g.height)})
+                    "geom": (g.x, g.y, g.width, g.height), "gdk": m})
     return out
 
 
@@ -831,7 +851,7 @@ def main(argv=None):
         wc = window_config_for(config, m)
         box = resolve_box(m["geom"], wc["width"], wc["height"], wc["ratio"], wc["anchor"], wc["margin"])
         scale = wc["scale"] or box[3] / 1080
-        windows.append(Lightbox(box, scale, vis if vis["enabled"] else None))
+        windows.append(Lightbox(box, scale, vis if vis["enabled"] else None, monitor=m))
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None

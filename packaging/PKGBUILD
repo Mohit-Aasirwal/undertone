@@ -1,0 +1,25 @@
+# Maintainer: Mohit Aasirwal
+pkgname=undertone
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Desktop-layer lyrics lightbox with an audio-reactive visualizer"
+arch=('any')
+url="https://github.com/Mohit-Aasirwal/undertone"
+license=('MIT')
+depends=('python' 'python-gobject' 'python-cairo' 'gtk3' 'python-numpy' 'libpulse')
+optdepends=('gtk-layer-shell: Wayland support')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 config.example.toml "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
+}
