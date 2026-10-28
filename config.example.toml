@@ -43,3 +43,8 @@ opacity = 0.2
 # allow = ["spotify", "brave"]  # only these players
 allow = []
 deny = []
+
+[theme]
+# Where the accent colour (current line, ring tint, backdrop glow) comes from:
+# "art" = extracted from the album cover, "gtk" = your GTK theme's selection colour, "none" = neutral grey
+source = "art"

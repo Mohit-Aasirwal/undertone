@@ -26,6 +26,7 @@ from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, ring_radii, smooth_levels  # noqa: E402
 from .control import ControlService, ctl_main  # noqa: E402
 from .offsets import Offsets  # noqa: E402
+from .theme import FALLBACK_ACCENT, FALLBACK_BASE, gtk_accent, palette_from_pixbuf  # noqa: E402
 
 CACHE_DIR = os.path.expanduser("~/.cache/undertone")
 POLL_MS = 250
@@ -38,6 +39,7 @@ USER_AGENT = f"undertone/{__version__} (https://github.com/Mohit-Aasirwal/undert
 AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
 OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
 MODES = ["rings"]
+DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 
 
 class Mpris:
@@ -171,9 +173,11 @@ class AudioLevels:
 class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
-    def __init__(self, windows, audio=None, players=None):
+    def __init__(self, windows, audio=None, players=None, theme=None):
         self.windows = windows
         self.audio = audio
+        self.theme_source = (theme or DEFAULT_THEME)["source"]
+        self.theme = {"accent": gtk_accent() if self.theme_source == "gtk" else FALLBACK_ACCENT, "base": FALLBACK_BASE}
         players = players or {}
         self.mpris = Mpris(players.get("allow"), players.get("deny"))
         self.track = None
@@ -233,6 +237,7 @@ class Playback:
                        "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
                        "instrumental" if self.lyrics.instrumental else "none"),
             "visualizer": self.vis_mode,
+            "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
         }
         if audio:
             GLib.timeout_add(FRAME_MS, self.animate)
@@ -274,16 +279,24 @@ class Playback:
             print("lyrics unavailable, retrying later:", e, file=sys.stderr)
             lyrics = None
         art = load_art(track.art_url)
-        GLib.idle_add(self.apply_loaded, track, lyrics, art)
+        palette = None
+        if art is not None and self.theme_source == "art":
+            try:
+                palette = palette_from_pixbuf(art)
+            except Exception as e:
+                print("palette extraction failed:", e, file=sys.stderr)
+        GLib.idle_add(self.apply_loaded, track, lyrics, art, palette)
 
     def retry_for(self, track):
         if self.track and self.track.key == track.key and self.lyrics is None:
             threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
         return False
 
-    def apply_loaded(self, track, lyrics, art):
+    def apply_loaded(self, track, lyrics, art, palette=None):
         if self.track and self.track.key == track.key:
             self.lyrics, self.art, self.loading = lyrics, art, False
+            if self.theme_source == "art":
+                self.theme = palette or {"accent": FALLBACK_ACCENT, "base": FALLBACK_BASE}
             if lyrics is None:
                 GLib.timeout_add(int(RETRY_S * 1000), self.retry_for, track)
             self.redraw()
@@ -327,6 +340,7 @@ class Lightbox(Gtk.Window):
         self.text_cache = None  # (key, surface) of header + lyrics; re-rendered when the line changes
 
     track = property(lambda self: self.state.track)
+    theme = property(lambda self: self.state.theme)
     lyrics = property(lambda self: self.state.lyrics)
     art = property(lambda self: self.state.art)
     loading = property(lambda self: self.state.loading)
@@ -366,7 +380,7 @@ class Lightbox(Gtk.Window):
     def draw_text_layer(self, cr, w, h):
         dw, dh = round(w * self.scale), round(h * self.scale)
         notice, lines, idx, highlight = self.lyrics_content()
-        key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh)
+        key = (self.track.key, id(self.lyrics), id(self.art), notice, idx, dw, dh, self.theme["accent"])
         if not self.text_cache or self.text_cache[0] != key:
             surface = cr.get_target().create_similar(cairo.Content.COLOR_ALPHA, dw, dh)
             tc = cairo.Context(surface)
@@ -386,7 +400,7 @@ class Lightbox(Gtk.Window):
     def draw_background(self, cr, w, h):
         """Paint the dimmed art backdrop from a cached surface; re-render only when art or size changes."""
         dw, dh = round(w * self.scale), round(h * self.scale)
-        key = (id(self.art), dw, dh)
+        key = (id(self.art), dw, dh, self.theme["base"])
         if not self.bg_cache or self.bg_cache[0] != key:
             surface = cr.get_target().create_similar(cairo.Content.COLOR, dw, dh)
             bc = cairo.Context(surface)
@@ -412,6 +426,13 @@ class Lightbox(Gtk.Window):
             cr.restore()
         cr.set_source_rgba(0, 0, 0, 0.35)
         cr.paint()
+        # soft radial glow in the art's base tint, centred on the lyrics area
+        br, bg, bb = self.theme["base"]
+        glow = cairo.RadialGradient(w / 2, h * 0.6, 0, w / 2, h * 0.6, max(w, h) * 0.7)
+        glow.add_color_stop_rgba(0, br, bg, bb, 0.9)
+        glow.add_color_stop_rgba(1, br, bg, bb, 0.0)
+        cr.set_source(glow)
+        cr.paint()
 
     def ring_geometry(self, w, h):
         top = 230
@@ -434,7 +455,10 @@ class Lightbox(Gtk.Window):
         spacing = (max_r - base) / max(n, 1)
         opacity = self.visualizer["opacity"]
         for r, level in zip(ring_radii(levels, base, spacing, spacing * 0.9), levels):
-            cr.set_source_rgba(0.85, 0.85, 0.88, opacity * (0.35 + 0.65 * float(level)))
+            ar, ag, ab = self.theme["accent"]
+            mix = 0.5 * float(level)  # grey when quiet, leaning to the accent when loud
+            cr.set_source_rgba(0.85 + (ar - 0.85) * mix, 0.85 + (ag - 0.85) * mix, 0.88 + (ab - 0.88) * mix,
+                               opacity * (0.35 + 0.65 * float(level)))
             cr.set_line_width(1.0 + 2.5 * float(level))
             cr.new_sub_path()
             cr.arc(cx, cy, float(r), 0, 2 * math.pi)
@@ -505,12 +529,11 @@ class Lightbox(Gtk.Window):
         layout.set_font_description(Pango.FontDescription("Sans Bold 34") if is_cur else Pango.FontDescription("Sans 24"))
         layout.set_text(text or "♪", -1)
         if is_cur:
-            alpha = 1.0
+            cr.set_source_rgba(*self.theme["accent"], 1.0)
         elif highlight:
-            alpha = max(0.12, 0.55 - 0.45 * min(dist, 1.0))
+            cr.set_source_rgba(1, 1, 1, max(0.12, 0.55 - 0.45 * min(dist, 1.0)))
         else:
-            alpha = 0.75
-        cr.set_source_rgba(1, 1, 1, alpha)
+            cr.set_source_rgba(1, 1, 1, 0.75)
         cr.move_to(x, y)
         PangoCairo.show_layout(cr, layout)
 
@@ -594,6 +617,7 @@ def main(argv=None):
         return
     config = load_config()
     vis = {**DEFAULT_VISUALIZER, **config.get("visualizer", {})}
+    theme = {**DEFAULT_THEME, **config.get("theme", {})}
     windows = []
     for m in select_monitors(mons, config.get("monitors", "all")):
         wc = window_config_for(config, m)
@@ -603,7 +627,7 @@ def main(argv=None):
     if not windows:
         sys.exit("undertone: no monitors matched the config; try --list-monitors")
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
-    state = Playback(windows, audio, config.get("players"))
+    state = Playback(windows, audio, config.get("players"), theme)
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
