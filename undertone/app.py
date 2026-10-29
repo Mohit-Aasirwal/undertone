@@ -29,6 +29,7 @@ from .stats import DB_PATH, MIN_PLAY_S, History, format_report  # noqa: E402
 from .web import NowPlayingServer, snapshot_payload  # noqa: E402
 from .wayland import layer_margins, load_layer_shell, session_type, wants_layer_shell  # noqa: E402
 from .artcheck import ArtRegistry  # noqa: E402
+from .fade import Fader  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -214,6 +215,8 @@ class Playback:
         self.font = {**DEFAULT_FONT, **(font or {})}
         self.art_png = None  # PNG bytes of the current art for the web page
         self.art_registry = ArtRegistry(os.path.join(CACHE_DIR, "art-seen.json"))
+        self.fader = Fader(0.3)
+        self.fade_timer = None
         self.fps_mark = (time.monotonic(), [0] * len(windows))
         web = {**DEFAULT_WEB, **(web or {})}
         self.web = None
@@ -274,14 +277,53 @@ class Playback:
         self.raised = raised
         for win in self.windows:
             win.set_layer(raised)
-            if self.track and not self.hidden_by_user:
-                win.show_all()
+        if self.track and not self.hidden_by_user:
+            self.reveal()
 
     # ---- control surface -------------------------------------------------
     def set_hidden(self, hidden):
         self.hidden_by_user = hidden
-        for win in self.windows:
-            (win.hide if hidden or not self.track else win.show_all)()
+        if hidden or not self.track:
+            self.conceal()
+        else:
+            self.reveal()
+
+    # ---- fades --------------------------------------------------------------
+    def reveal(self):
+        """Map the windows (at their current opacity) and fade them in."""
+        now = time.monotonic()
+        if all(w.get_visible() for w in self.windows) and self.fader.target == 1.0:
+            return
+        if not all(w.get_visible() for w in self.windows):
+            for w in self.windows:
+                w.set_opacity(0.0)
+                w.show_all()
+        self.fader.start(1.0, now)
+        self.run_fade()
+
+    def conceal(self):
+        """Fade the windows out, then unmap them."""
+        if not any(w.get_visible() for w in self.windows):
+            return
+        self.fader.start(0.0, time.monotonic())
+        self.run_fade()
+
+    def run_fade(self):
+        if self.fade_timer is None:
+            self.fade_timer = GLib.timeout_add(16, self.fade_tick)
+
+    def fade_tick(self):
+        now = time.monotonic()
+        v = self.fader.value(now)
+        for w in self.windows:
+            w.set_opacity(v)
+        if self.fader.active(now):
+            return True
+        if self.fader.target == 0.0:
+            for w in self.windows:
+                w.hide()
+        self.fade_timer = None
+        return False
 
     def toggle(self):
         self.set_hidden(not self.hidden_by_user)
@@ -313,6 +355,7 @@ class Playback:
         audio = self.audio.snapshot() if self.audio else None
         return {
             "visible": any(w.get_visible() for w in self.windows),
+            "opacity": round(self.fader.value(time.monotonic()), 2),
             "hidden_by_user": self.hidden_by_user,
             "track": {"title": t.title, "artist": t.artist, "album": t.album, "length_s": t.length_us / 1e6} if t else None,
             "position_s": round(self.position(), 3) if t else None,
@@ -403,12 +446,10 @@ class Playback:
             elif self.last_tick is not None:
                 self.played_s += now - self.last_tick
             self.last_tick = now
-            for win in self.windows:
-                if not win.get_visible() and not self.hidden_by_user:
-                    win.show_all()
+            if not self.hidden_by_user:
+                self.reveal()
         elif self.track and now - self.last_playing_at > HIDE_GRACE_S:
-            for win in self.windows:
-                win.hide()
+            self.conceal()
             self.finish_play()
             self.track = None
         if not track:
