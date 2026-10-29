@@ -28,6 +28,7 @@ from .idle import Screensaver, idle_seconds  # noqa: E402
 from .stats import DB_PATH, MIN_PLAY_S, History, format_report  # noqa: E402
 from .web import NowPlayingServer, snapshot_payload  # noqa: E402
 from .wayland import layer_margins, load_layer_shell, session_type, wants_layer_shell  # noqa: E402
+from .artcheck import ArtRegistry  # noqa: E402
 from .player import pick_playing, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -208,6 +209,7 @@ class Playback:
                  translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None):
         self.windows = windows
         self.art_png = None  # PNG bytes of the current art for the web page
+        self.art_registry = ArtRegistry(os.path.join(CACHE_DIR, "art-seen.json"))
         self.fps_mark = (time.monotonic(), [0] * len(windows))
         web = {**DEFAULT_WEB, **(web or {})}
         self.web = None
@@ -315,6 +317,7 @@ class Playback:
                        "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
                        "instrumental" if self.lyrics.instrumental else "none"),
             "lyrics_source": self.lyrics.source if self.lyrics else None,
+            "art": self.art is not None,
             "translated": self.translations is not None,
             "backdrop_scale": round(self.kb_scale, 4),
             "screensaver": self.raised,
@@ -415,6 +418,11 @@ class Playback:
             print("lyrics unavailable, retrying later:", e, file=sys.stderr)
             lyrics = None
         art = load_art(track.art_url)
+        if art is not None:
+            digest = hashlib.sha1(art.get_pixels()).hexdigest()
+            if self.art_registry.note(digest, track.artist):
+                print(f"ignoring placeholder art for {track.title!r}", file=sys.stderr)
+                art = None
         palette = None
         if art is not None and self.theme_source == "art":
             try:
