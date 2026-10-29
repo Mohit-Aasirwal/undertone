@@ -630,16 +630,21 @@ class Lightbox(Gtk.Window):
                 cc = cairo.Context(cur_surface)
                 cc.scale(self.scale, self.scale)
                 self.draw_lyrics(cc, w, h, lines, idx, highlight, part="current")
-            # same track and lyrics, new line: glide from where the new line sat in the old layout
+            # same track and lyrics, new line: glide from where the new line sat in the old layout,
+            # and cross-fade the outgoing line from accent to grey at its new position
             if prev and prev[0][:2] == key[:2] and idx in prev[5] and highlight:
-                self.scroll = {"start": time.monotonic(), "delta": prev[5][idx] - prev[3]}
+                old_idx = prev[0][2]
+                self.scroll = {"start": time.monotonic(), "delta": prev[5][idx] - prev[3],
+                               "old_surface": prev[2], "old_cy": prev[3],
+                               "old_new_cy": self.line_pos.get(old_idx)}
             self.text_cache = (key, surface, cur_surface, cur_cy, self.cur_extent, dict(self.line_pos))
         _, surface, cur_surface, cur_cy, (ex0, ew), _ = self.text_cache
 
-        offset = 0.0
+        offset, fade = 0.0, 0.0
         if self.scroll:
             p = min(1.0, (time.monotonic() - self.scroll["start"]) / self.SCROLL_S)
             offset = self.scroll["delta"] * (1 - p) ** 3  # ease-out: fast start, soft landing
+            fade = (1 - p) ** 2                            # outgoing accent line fades out
             if p >= 1.0:
                 self.scroll = None
         cr.save()
@@ -649,6 +654,19 @@ class Lightbox(Gtk.Window):
         cr.translate(0, offset * self.scale)
         cr.set_source_surface(surface, 0, 0)
         cr.paint()
+        if self.scroll and fade > 0.01 and self.scroll.get("old_surface") is not None \
+                and self.scroll.get("old_new_cy") is not None:
+            # the old line, still in accent and large, shrinking and fading over its grey successor
+            old = self.scroll
+            cy_new = old["old_new_cy"] * self.scale
+            shrink = 1.0 - 0.29 * (1 - fade)  # Sans Bold 34 -> Sans 24
+            cr.save()
+            cr.translate(dw / 2, cy_new)
+            cr.scale(shrink, shrink)
+            cr.translate(-dw / 2, -old["old_cy"] * self.scale)
+            cr.set_source_surface(old["old_surface"], 0, 0)
+            cr.paint_with_alpha(fade)
+            cr.restore()
         if cur_surface is not None:
             k = 1.0 + 0.04 * pulse
             cx, cy = dw / 2, cur_cy * self.scale
