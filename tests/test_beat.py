@@ -56,3 +56,48 @@ class OnsetDetection(unittest.TestCase):
             det.feed(0.05)
         self.assertGreater(p0, 0.9)
         self.assertLess(det.pulse(), p0 * 0.5)
+
+
+class TempoStability(unittest.TestCase):
+    FRAME_HZ = 23.4
+
+    def test_half_time_hits_fold_into_the_main_tempo(self):
+        det = OnsetDetector(self.FRAME_HZ)
+        kick = [1.0, 0.7, 0.4, 0.2] + [0.05] * 8          # every 12 frames = 117 bpm
+        double = kick + [1.0, 0.7, 0.4, 0.2] + [0.05] * 20  # then a 24-frame gap (58 bpm, folds to 117)
+        feed_pattern(det, kick, 10)
+        feed_pattern(det, double, 10)
+        self.assertAlmostEqual(det.tempo_bpm(), 117, delta=3)
+
+    def test_isolated_extra_hits_do_not_move_the_tempo(self):
+        det = OnsetDetector(self.FRAME_HZ)
+        kick = [1.0, 0.7, 0.4, 0.2] + [0.05] * 8
+        feed_pattern(det, kick, 20)
+        # one off-grid ghost hit then back to the grid
+        feed_pattern(det, [1.0, 0.6, 0.05, 0.05, 0.05, 1.0, 0.7, 0.4, 0.2] + [0.05] * 3, 1)
+        feed_pattern(det, kick, 20)
+        self.assertAlmostEqual(det.tempo_bpm(), 117, delta=3)
+
+    def test_tempo_window_is_long_enough_to_bridge_a_quiet_bar(self):
+        det = OnsetDetector(self.FRAME_HZ)
+        kick = [1.0, 0.7, 0.4, 0.2] + [0.05] * 8
+        feed_pattern(det, kick, 30)
+        feed_pattern(det, [0.05], 12 * 6)  # six beats of silence (~3 s)
+        self.assertGreater(det.tempo_bpm(), 0)
+
+    def test_swung_beats_report_the_underlying_tempo(self):
+        # hits alternate 10 and 14 frames apart (swing): the tempo is the 12-frame average, 117 bpm
+        det = OnsetDetector(self.FRAME_HZ)
+        pattern = [1.0, 0.6, 0.3] + [0.05] * 7 + [1.0, 0.6, 0.3] + [0.05] * 11
+        feed_pattern(det, pattern, 12)
+        self.assertAlmostEqual(det.tempo_bpm(), 117, delta=3)
+
+    def test_estimate_is_stable_across_consecutive_calls(self):
+        det = OnsetDetector(self.FRAME_HZ)
+        pattern = [1.0, 0.6, 0.3] + [0.05] * 7 + [1.0, 0.6, 0.3] + [0.05] * 11
+        feed_pattern(det, pattern, 12)
+        readings = []
+        for _ in range(12):
+            feed_pattern(det, pattern, 1)
+            readings.append(det.tempo_bpm())
+        self.assertLessEqual(max(readings) - min(readings), 4, readings)
