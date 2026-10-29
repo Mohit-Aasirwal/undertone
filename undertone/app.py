@@ -570,6 +570,7 @@ class Lightbox(Gtk.Window):
         audio = self.state.audio.snapshot() if self.state.audio else {"levels": [], "pulse": 0.0, "bpm": 0}
         if self.visualizer and self.state.audio:
             cx, cy, max_r = self.ring_geometry(w, h)
+            self.draw_reactive_glow(cr, cx, cy, max_r, audio)
             DRAWERS[self.state.vis_mode](cr, cx, cy, max_r, audio["levels"], audio["pulse"],
                                          self.theme["accent"], self.visualizer["opacity"], self.state.vis_state)
         self.draw_text_layer(cr, w, h, audio["pulse"])
@@ -738,6 +739,25 @@ class Lightbox(Gtk.Window):
         glow.add_color_stop_rgba(1, br, bg, bb, 0.0)
         cr.set_source(glow)
         cr.paint()
+
+    def draw_reactive_glow(self, cr, cx, cy, max_r, audio):
+        """A soft accent glow under the visualizer that breathes with the bass and flashes on the beat.
+        It lives inside the ring region, which is repainted every frame anyway."""
+        levels = audio["levels"]
+        if not len(levels):
+            return
+        bass = float(np.mean(levels[: max(1, len(levels) // 4)]))
+        strength = 0.10 * bass + 0.12 * audio["pulse"]
+        if strength < 0.005:
+            return
+        r, g, b = self.theme["accent"]
+        glow = cairo.RadialGradient(cx, cy, 0, cx, cy, max_r)
+        glow.add_color_stop_rgba(0.0, r, g, b, strength)
+        glow.add_color_stop_rgba(0.6, r, g, b, strength * 0.35)
+        glow.add_color_stop_rgba(1.0, r, g, b, 0.0)
+        cr.set_source(glow)
+        cr.arc(cx, cy, max_r, 0, 2 * math.pi)
+        cr.fill()
 
     def ring_geometry(self, w, h):
         if self.full_visual():  # nothing to read: give the visualizer the whole area
