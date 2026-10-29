@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mohitaasirwal.Undertone</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Undertone</name>
+  <summary>Lyrics that live underneath your windows</summary>
+  <developer id="io.github.mohitaasirwal"><name>Mohit Aasirwal</name></developer>
+  <description>
+    <p>Undertone turns your desktop into a lyrics lightbox whenever music plays. It sits on the desktop layer, above the wallpaper and below every window, so it is there when you glance at an empty desktop and out of the way while you work.</p>
+    <p>Time-synced lyrics scroll with the track, the album art fades in behind them, the colours come from the cover, and an audio-reactive visualizer moves to the beat.</p>
+    <ul>
+      <li>Works with any MPRIS player: Spotify, YouTube Music, VLC, Firefox and Chromium-based browsers</li>
+      <li>Synced lyrics from local .lrc files, LRCLIB and NetEase, with word-level karaoke</li>
+      <li>Rings, bars, wave and particle visualizers driven by the system audio with beat detection</li>
+      <li>Colour theming from the album cover, translations, multi-monitor layouts</li>
+      <li>Runtime control over D-Bus, listening stats, a shared listening web page</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.mohitaasirwal.Undertone.desktop</launchable>
+  <url type="homepage">https://github.com/Mohit-Aasirwal/undertone</url>
+  <url type="bugtracker">https://github.com/Mohit-Aasirwal/undertone/issues</url>
+  <url type="donation">https://ko-fi.com/mohitaasirwal</url>
+  <url type="vcs-browser">https://github.com/Mohit-Aasirwal/undertone</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Mohit-Aasirwal/undertone/main/docs/screenshot.png</image>
+      <caption>Synced lyrics over the album art with the ring visualizer</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <branding>
+    <color type="primary" scheme_preference="light">#f5c26b</color>
+    <color type="primary" scheme_preference="dark">#2a1b12</color>
+  </branding>
+  <releases>
+    <release version="1.2.0" date="2026-10-29">
+      <description><p>Beat-stable tempo, gliding lines, glass-free look, reactive glow, fonts, second accent, fades, profiles, pause screen, lyrics editor, hotkeys, panel applet.</p></description>
+    </release>
+    <release version="1.1.2" date="2026-10-28"/>
+    <release version="1.0.0" date="2026-10-28"/>
+  </releases>
+</component>

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Undertone
+Comment=Lyrics that live underneath your windows
+Exec=undertone
+Icon=io.github.mohitaasirwal.Undertone
+Categories=AudioVideo;Audio;Music;
+Keywords=lyrics;spotify;mpris;visualizer;
+Terminal=false
+X-GNOME-UsesNotifications=false
