@@ -30,3 +30,6 @@ undertone = "undertone.app:main"
 
 [tool.setuptools.packages.find]
 include = ["undertone*"]
+
+[tool.setuptools.package-data]
+undertone = ["integrations/*/*/*"]

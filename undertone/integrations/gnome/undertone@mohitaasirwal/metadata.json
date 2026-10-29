@@ -1,0 +1,8 @@
+{
+  "uuid": "undertone@mohitaasirwal",
+  "name": "Undertone",
+  "description": "Control the Undertone lyrics lightbox from the top bar.",
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/Mohit-Aasirwal/undertone",
+  "version": 1
+}

@@ -1082,6 +1082,7 @@ USAGE = f"""undertone {__version__} — desktop-layer lyrics with an audio-react
 
 usage: undertone [--list-monitors | --install-autostart | --uninstall-autostart | --version]
                  [--install-hotkeys | --uninstall-hotkeys]   desktop shortcuts for the ctl commands
+                 [--install-applet | --uninstall-applet]     Cinnamon panel applet / GNOME extension
        undertone ctl toggle|show|hide|cycle-vis|nudge <ms>|offset <ms>|global-offset <ms>|status
        undertone stats [--days N]        listening history (default 7 days; --days 0 for all time)
        undertone lyrics show|export|shift <ms>|set <line> <time>|mark|clear   edit the local .lrc
@@ -1093,6 +1094,28 @@ Runs until killed. Config: {CONFIG_PATH}
 def launch_command():
     exe = shutil.which("undertone")
     return exe if exe else f"{sys.executable} -m undertone"
+
+
+def install_applet(remove=False):
+    """Copy the Cinnamon applet or GNOME extension into the user's extensions directory."""
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    src_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "integrations")
+    uuid = "undertone@mohitaasirwal"
+    if "cinnamon" in de:
+        src, dst = os.path.join(src_root, "cinnamon", uuid), os.path.expanduser(f"~/.local/share/cinnamon/applets/{uuid}")
+        how = "Right-click the panel > Applets > Undertone > add to panel"
+    elif "gnome" in de or "ubuntu" in de:
+        src, dst = os.path.join(src_root, "gnome", uuid), os.path.expanduser(f"~/.local/share/gnome-shell/extensions/{uuid}")
+        how = f"Log out and back in (Wayland) or restart the shell, then: gnome-extensions enable {uuid}"
+    else:
+        sys.exit("The applet exists for Cinnamon and GNOME; your desktop reports " + (de or "nothing") + ".")
+    if remove:
+        shutil.rmtree(dst, ignore_errors=True)
+        print(f"removed {dst}")
+        return
+    shutil.rmtree(dst, ignore_errors=True)
+    shutil.copytree(src, dst)
+    print(f"installed to {dst}\n{how}")
 
 
 def install_autostart():
@@ -1127,6 +1150,8 @@ def main(argv=None):
         return
     if "--install-autostart" in argv:
         return install_autostart()
+    if "--install-applet" in argv or "--uninstall-applet" in argv:
+        return install_applet(remove="--uninstall-applet" in argv)
     if "--install-hotkeys" in argv:
         from .hotkeys import install
         return install()

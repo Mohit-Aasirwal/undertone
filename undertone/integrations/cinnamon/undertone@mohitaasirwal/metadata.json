@@ -1,0 +1,7 @@
+{
+  "uuid": "undertone@mohitaasirwal",
+  "name": "Undertone",
+  "description": "Control the Undertone lyrics lightbox: toggle, cycle visualizer, nudge lyrics, mark lines.",
+  "version": "1.0",
+  "max-instances": 1
+}
