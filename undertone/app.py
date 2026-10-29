@@ -35,7 +35,7 @@ from .modes import DRAWERS, MODES  # noqa: E402
 from .control import ControlService, ctl_main  # noqa: E402
 from .beat import OnsetDetector  # noqa: E402
 from .offsets import Offsets  # noqa: E402
-from .theme import FALLBACK_ACCENT, FALLBACK_BASE, gtk_accent, palette_from_pixbuf  # noqa: E402
+from .theme import FALLBACK_ACCENT, FALLBACK_BASE, gtk_accent, palette_from_pixbuf, sibling  # noqa: E402
 
 CACHE_DIR = os.path.expanduser("~/.cache/undertone")
 POLL_MS = 250
@@ -238,7 +238,8 @@ class Playback:
         self.audio = audio
         self.vis_mode = vis_mode if vis_mode in MODES else MODES[0]
         self.theme_source = (theme or DEFAULT_THEME)["source"]
-        self.theme = {"accent": gtk_accent() if self.theme_source == "gtk" else FALLBACK_ACCENT, "base": FALLBACK_BASE}
+        accent = gtk_accent() if self.theme_source == "gtk" else FALLBACK_ACCENT
+        self.theme = {"accent": accent, "accent2": sibling(accent), "base": FALLBACK_BASE}
         players = players or {}
         self.mpris = Mpris(players.get("allow"), players.get("deny"))
         self.track = None
@@ -329,6 +330,7 @@ class Playback:
             "web": f"http://{self.web.httpd.server_address[0]}:{self.web.port}/" if self.web else None,
             "visualizer": self.vis_mode,
             "accent": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent"]),
+            "accent2": "#%02x%02x%02x" % tuple(int(c * 255) for c in self.theme["accent2"]),
             "bpm": self.audio.bpm if self.audio else None,
             "pulse": round(self.audio.pulse, 3) if self.audio else None,
             "audio_level": round(float(np.mean(audio["levels"])), 3) if audio is not None and len(audio["levels"]) else None,
@@ -464,7 +466,7 @@ class Playback:
             self.lyrics, self.art, self.loading = lyrics, art, False
             self.art_png = png
             if self.theme_source == "art":
-                self.theme = palette or {"accent": FALLBACK_ACCENT, "base": FALLBACK_BASE}
+                self.theme = palette or {"accent": FALLBACK_ACCENT, "accent2": FALLBACK_ACCENT, "base": FALLBACK_BASE}
             if lyrics is None:
                 GLib.timeout_add(int(RETRY_S * 1000), self.retry_for, track)
             self.redraw()
@@ -579,7 +581,7 @@ class Lightbox(Gtk.Window):
             cx, cy, max_r = self.ring_geometry(w, h)
             self.draw_reactive_glow(cr, cx, cy, max_r, audio)
             DRAWERS[self.state.vis_mode](cr, cx, cy, max_r, audio["levels"], audio["pulse"],
-                                         self.theme["accent"], self.visualizer["opacity"], self.state.vis_state)
+                                         self.theme["accent2"], self.visualizer["opacity"], self.state.vis_state)
         self.draw_text_layer(cr, w, h, audio["pulse"])
 
     def lyrics_content(self):
@@ -757,7 +759,7 @@ class Lightbox(Gtk.Window):
         strength = 0.10 * bass + 0.12 * audio["pulse"]
         if strength < 0.005:
             return
-        r, g, b = self.theme["accent"]
+        r, g, b = self.theme["accent2"]
         glow = cairo.RadialGradient(cx, cy, 0, cx, cy, max_r)
         glow.add_color_stop_rgba(0.0, r, g, b, strength)
         glow.add_color_stop_rgba(0.6, r, g, b, strength * 0.35)
