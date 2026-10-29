@@ -164,4 +164,25 @@ def draw_particles(cr, cx, cy, max_r, levels, pulse, accent, opacity, state):
     cr.stroke()
 
 
-DRAWERS = {"rings": draw_rings, "bars": draw_bars, "wave": draw_wave, "particles": draw_particles}
+def draw_rings_halfres(cr, cx, cy, max_r, levels, pulse, accent, opacity, state):
+    """draw_rings into a server-side half-size surface, scaled up by the compositor."""
+    size = int(max_r + 6)
+    buf = state.get("halfbuf")
+    if buf is None or buf.get_width() != size:
+        buf = state["halfbuf"] = cr.get_target().create_similar(cairo.CONTENT_COLOR_ALPHA, size, size)
+    bc = cairo.Context(buf)
+    bc.set_operator(cairo.OPERATOR_CLEAR)
+    bc.paint()
+    bc.set_operator(cairo.OPERATOR_OVER)
+    bc.scale(0.5, 0.5)
+    draw_rings(bc, max_r + 6, max_r + 6, max_r, levels, pulse, accent, opacity, state)
+    cr.save()
+    cr.translate(cx - max_r - 6, cy - max_r - 6)
+    cr.scale(2, 2)
+    cr.set_source_surface(buf, 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+    cr.paint()
+    cr.restore()
+
+
+DRAWERS = {"rings": draw_rings_halfres, "bars": draw_bars, "wave": draw_wave, "particles": draw_particles}

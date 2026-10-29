@@ -42,7 +42,7 @@ POLL_MS = 250
 HIDE_GRACE_S = 3.0
 RETRY_S = 20.0
 FRAME_MS = 33
-DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2, "mode": "rings"}
+DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2, "mode": "rings", "fps": 30}
 MPRIS_PREFIX = "org.mpris.MediaPlayer2."
 USER_AGENT = f"undertone/{__version__} (https://github.com/Mohit-Aasirwal/undertone)"
 AUTOSTART = os.path.expanduser("~/.config/autostart/undertone.desktop")
@@ -206,8 +206,10 @@ class Playback:
     """Polls MPRIS, loads lyrics and art, and shows/hides every Lightbox window."""
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
-                 translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None):
+                 translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None,
+                 frame_rate=30):
         self.windows = windows
+        self.frame_rate = frame_rate
         self.art_png = None  # PNG bytes of the current art for the web page
         self.art_registry = ArtRegistry(os.path.join(CACHE_DIR, "art-seen.json"))
         self.fps_mark = (time.monotonic(), [0] * len(windows))
@@ -254,7 +256,7 @@ class Playback:
         })
         GLib.timeout_add(POLL_MS, self.poll)
         if audio:
-            GLib.timeout_add(FRAME_MS, self.animate)
+            GLib.timeout_add(int(1000 / max(5, min(60, self.frame_rate))), self.animate)
         if self.backdrop["motion"]:
             GLib.timeout_add(MOTION_MS, self.drift)
         if self.screensaver.threshold > 0:
@@ -371,12 +373,15 @@ class Playback:
 
     def animate(self):
         if self.track:
+            pulse_q = round(self.audio.pulse * 40) if self.audio else 0  # the line scale in 1/40 steps
             for win in self.windows:
                 if win.scroll:
                     win.area.queue_draw()
                 else:
                     win.area.queue_draw_area(*win.ring_bounds())
-                    win.area.queue_draw_area(*win.current_line_bounds())
+                    if pulse_q != win.last_pulse_q:  # the band only changes when the beat scale does
+                        win.area.queue_draw_area(*win.current_line_bounds())
+                win.last_pulse_q = pulse_q
         return True
 
     def poll(self):
@@ -513,6 +518,7 @@ class Lightbox(Gtk.Window):
         self.state = None
         self.cur_extent = (0, 0)  # x and width of the current line's ink, reference coordinates
         self.frames = 0  # draw calls, for the fps readout in status
+        self.last_pulse_q = -1
         self.static_cache = None  # (key, surface): the header, never scrolls
         self.line_pos = {}        # line index -> vertical centre in the most recent layout
         self.scroll = None        # {"start": t, "delta": px} while lines glide to the new current line
@@ -938,7 +944,7 @@ def main(argv=None):
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
                      config.get("translation"), config.get("backdrop"), config.get("screensaver"),
-                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"))
+                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"), int(vis["fps"]))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

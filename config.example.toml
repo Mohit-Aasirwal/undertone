@@ -37,6 +37,8 @@ rings = 10
 opacity = 0.2
 # Starting mode: "rings", "bars", "wave" or "particles". Cycle at runtime with `undertone ctl cycle-vis`.
 mode = "rings"
+# Animation frame rate (5..60). Lower it on a weak machine; 24 still looks smooth.
+fps = 30
 
 [players]
 # Which MPRIS players count. Case-insensitive substring match on the player's bus name
