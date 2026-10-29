@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "undertone"
-version = "1.1.2"
+version = "1.2.0"
 description = "Desktop-layer lyrics lightbox with an audio-reactive ring visualizer for Linux"
 readme = "README.md"
 license = { text = "MIT" }

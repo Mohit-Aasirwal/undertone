@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.0 — 2026-10-29
+
+### Fixes
+- Placeholder album art (a browser handing over its own icon) is detected when the same image shows up
+  for different artists, and dropped.
+- Tempo is estimated from an octave-folded interval histogram over 30 s: on real music the reading
+  spread went from 99 bpm to 6 bpm.
+- Visualizer CPU trimmed about 10% (band repaints only when the beat scale changes, half-res ring
+  layer); `[visualizer] fps` is configurable.
+
+### Visual
+- The outgoing current line cross-fades and shrinks into its grey successor during the glide.
+- A soft accent glow under the visualizer breathes with the bass and flashes on the beat.
+- `[font]` family, weight and scale.
+- A second accent extracted from the cover drives the glow and visualizer tint; the current line keeps
+  the first.
+
+### Behaviour
+- Windows fade in and out (300 ms) instead of appearing and vanishing.
+- `[profiles.<player>]` per-player lyric offset and art suppression.
+- Pause keeps a dimmed lightbox with a PAUSED pill for `[playback] pause_hold_s` seconds before fading.
+- `undertone lyrics` editor: show, export, shift, set, mark (tap along), clear. Edits go to a local
+  `.lrc` and reload live.
+
+### Reach
+- `--install-hotkeys` registers Super+Alt shortcuts for toggle, cycle-vis, nudge and mark on Cinnamon
+  and GNOME; `--uninstall-hotkeys` removes them.
+- `--install-applet` installs a Cinnamon panel applet or a GNOME Shell extension with the same controls.
+- Flathub submission prepared: pinned manifest, AppStream metadata, desktop entry, icon.
+
 ## 1.1.2 — 2026-10-28
 
 - Removed the frosted cards behind the header and the lyrics; the glow on the current line stays.

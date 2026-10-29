@@ -20,6 +20,9 @@ Undertone turns your desktop into a lyrics lightbox whenever music plays. It sit
 - **Translations.** A faint translated line under the current lyric, in any language.
 - **Runtime control.** `undertone ctl` over D-Bus: toggle, cycle visualizer, nudge lyric timing, inspect status. Bind the commands to hotkeys in your desktop's keyboard settings.
 - **Screensaver mode.** After N idle minutes the lyrics rise above everything as an ambient display, then drop back when you return.
+- **Lyrics editor.** `undertone lyrics` exports, shifts, retimes and tap-marks lines into a local `.lrc` that reloads live.
+- **Pause screen.** A dimmed, paused lightbox lingers for a few seconds instead of vanishing.
+- **Hotkeys and panel.** `--install-hotkeys` binds the controls on Cinnamon and GNOME; `--install-applet` adds a panel menu.
 - **Stats.** Listening history with `undertone stats`.
 - **Shared page.** A small web page mirrors the lyrics live to a phone or laptop on the same network.
 - **Multi-monitor.** Each monitor gets its own box with size, aspect ratio, anchor and text scale.
@@ -30,7 +33,7 @@ Undertone turns your desktop into a lyrics lightbox whenever music plays. It sit
 Debian, Ubuntu, Mint: download the `.deb` from the [latest release](https://github.com/Mohit-Aasirwal/undertone/releases) and install it:
 
 ```bash
-sudo apt install ./undertone_1.1.2_all.deb
+sudo apt install ./undertone_1.2.0_all.deb
 ```
 
 From source on any distro with `pipx`:
@@ -76,6 +79,18 @@ enabled = true
 mode = "rings"                # rings, bars, wave, particles
 rings = 10
 opacity = 0.2
+fps = 30
+
+[font]
+family = "Sans"
+weight = "Bold"
+scale = 1.0
+
+[profiles.brave]              # per-player: lyric offset and art
+offset_ms = -150
+
+[playback]
+pause_hold_s = 8
 
 [theme]
 source = "art"                # art, gtk, none
@@ -109,6 +124,10 @@ undertone ctl cycle-vis         # rings -> bars -> wave -> particles
 undertone ctl nudge +200        # lyrics 200 ms later for this track (persisted)
 undertone ctl global-offset -100
 undertone stats --days 30
+undertone lyrics show         # current lines with timing
+undertone lyrics mark         # tap along: stamp the playback position on the next untimed line
+undertone --install-hotkeys   # Super+Alt+L toggle, +V cycle, +Left/Right nudge, +M mark
+undertone --install-applet    # Cinnamon applet / GNOME extension
 ```
 
 These are plain D-Bus calls on `org.undertone`, so any launcher or hotkey daemon can trigger them.
