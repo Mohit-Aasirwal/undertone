@@ -89,3 +89,12 @@ bind = "0.0.0.0"
 family = "Sans"
 weight = "Bold"       # Bold, Semi-Bold, Heavy, Normal...
 scale = 1.0           # multiplies every text size
+
+[profiles]
+# Per-player settings, matched by substring of the player's bus name.
+#   offset_ms  added to the lyric position for that player (browsers report position late)
+#   art        false to ignore the art a player hands over (some send their own icon)
+# [profiles.brave]
+# offset_ms = -150
+# [profiles.spotify]
+# offset_ms = 0

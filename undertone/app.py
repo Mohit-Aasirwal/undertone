@@ -30,7 +30,7 @@ from .web import NowPlayingServer, snapshot_payload  # noqa: E402
 from .wayland import layer_margins, load_layer_shell, session_type, wants_layer_shell  # noqa: E402
 from .artcheck import ArtRegistry  # noqa: E402
 from .fade import Fader  # noqa: E402
-from .player import pick_playing, track_from_metadata  # noqa: E402
+from .player import pick_playing, profile_for, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
 from .control import ControlService, ctl_main  # noqa: E402
@@ -87,13 +87,13 @@ class Mpris:
                 continue
         name = pick_playing(statuses, self.allow, self.deny)
         if not name:
-            return None, 0.0
+            return None, 0.0, None
         try:
             track = track_from_metadata(self._props(name, "Metadata"))
             pos = self._props(name, "Position") / 1_000_000
         except GLib.Error:
-            return None, 0.0
-        return track, pos
+            return None, 0.0, None
+        return track, pos, name
 
 
 DEFAULT_LYRICS = {"sources": ["local", "lrclib", "netease"], "local_dirs": ["~/Music"]}
@@ -209,8 +209,11 @@ class Playback:
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
                  translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None,
-                 frame_rate=30, font=None):
+                 frame_rate=30, font=None, profiles=None):
         self.windows = windows
+        self.profiles = profiles or {}
+        self.player = None
+        self.profile = profile_for("", None)
         self.frame_rate = frame_rate
         self.font = {**DEFAULT_FONT, **(font or {})}
         self.art_png = None  # PNG bytes of the current art for the web page
@@ -361,6 +364,8 @@ class Playback:
             "position_s": round(self.position(), 3) if t else None,
             "offset_ms": self.offsets.get(t.key) if t else None,
             "global_offset_ms": self.offsets.global_ms,
+            "player": self.player,
+            "profile": self.profile,
             "lyrics": (None if self.lyrics is None else
                        "synced" if self.lyrics.synced else "plain" if self.lyrics.plain else
                        "instrumental" if self.lyrics.instrumental else "none"),
@@ -432,8 +437,11 @@ class Playback:
         return True
 
     def poll(self):
-        track, pos = self.mpris.snapshot()
+        track, pos, player = self.mpris.snapshot()
         now = time.monotonic()
+        if player != self.player:
+            self.player = player
+            self.profile = profile_for(player, self.profiles) if player else dict(profile_for("", None))
         if track:
             self.last_playing_at = now
             self.pos, self.pos_at = pos, now
@@ -467,7 +475,7 @@ class Playback:
         except Exception as e:  # transient or unexpected: show a notice and retry
             print("lyrics unavailable, retrying later:", e, file=sys.stderr)
             lyrics = None
-        art = load_art(track.art_url)
+        art = load_art(track.art_url) if self.profile["art"] else None
         if art is not None:
             digest = hashlib.sha1(art.get_pixels()).hexdigest()
             if self.art_registry.note(digest, track.artist):
@@ -515,7 +523,8 @@ class Playback:
 
     def position(self):
         raw = self.pos + (time.monotonic() - self.pos_at)
-        return raw + (self.offsets.total_seconds(self.track.key) if self.track else 0.0)
+        return raw + (self.offsets.total_seconds(self.track.key) if self.track else 0.0) \
+            + self.profile["offset_ms"] / 1000
 
 
 class Lightbox(Gtk.Window):
@@ -1033,7 +1042,7 @@ def main(argv=None):
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
                      config.get("translation"), config.get("backdrop"), config.get("screensaver"),
                      os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"), int(vis["fps"]),
-                     config.get("font"))
+                     config.get("font"), config.get("profiles"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)

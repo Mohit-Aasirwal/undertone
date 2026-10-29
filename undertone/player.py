@@ -48,3 +48,17 @@ def track_from_metadata(meta):
         art_url=meta.get("mpris:artUrl") or "",
         url=meta.get("xesam:url") or "",
     )
+
+
+DEFAULT_PROFILE = {"offset_ms": 0, "art": True}
+
+
+def profile_for(name, profiles):
+    """Per-player settings: the first profile whose key is a substring of the player's bus name."""
+    short = name[len(MPRIS_PREFIX):].lower() if name.startswith(MPRIS_PREFIX) else name.lower()
+    merged = dict(DEFAULT_PROFILE)
+    for key, values in (profiles or {}).items():
+        if key.lower() in short and isinstance(values, dict):
+            merged.update(values)
+            break
+    return merged
