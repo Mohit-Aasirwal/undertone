@@ -30,6 +30,8 @@ from .web import NowPlayingServer, snapshot_payload  # noqa: E402
 from .wayland import layer_margins, load_layer_shell, session_type, wants_layer_shell  # noqa: E402
 from .artcheck import ArtRegistry  # noqa: E402
 from .fade import Fader  # noqa: E402
+from .lrcedit import (clear_times, fmt_time, format_lrc, mark_next, parse_editable, parse_time,  # noqa: E402
+                      set_line_time, shift_lines)
 from .player import pick_playing, profile_for, track_from_metadata  # noqa: E402
 from .visualizer import band_levels, smooth_levels  # noqa: E402
 from .modes import DRAWERS, MODES  # noqa: E402
@@ -265,6 +267,7 @@ class Playback:
             "Toggle": self.toggle, "Show": lambda: self.set_hidden(False), "Hide": lambda: self.set_hidden(True),
             "CycleVisualizer": self.cycle_visualizer, "Nudge": self.nudge, "SetOffset": self.set_offset,
             "SetGlobalOffset": self.set_global_offset, "Status": self.status,
+            "Lyrics": self.lyrics_json, "Reload": self.reload_lyrics,
         })
         GLib.timeout_add(POLL_MS, self.poll)
         if audio:
@@ -351,6 +354,30 @@ class Playback:
 
     def set_global_offset(self, ms):
         self.offsets.global_ms = ms
+
+    def lyrics_json(self):
+        """Current track, its lyric lines with timing, and where a local .lrc for it would live."""
+        from .sources import local_lrc_candidates
+        if not self.track:
+            raise RuntimeError("nothing is playing")
+        ly = self.lyrics
+        lines = []
+        if ly and ly.synced:
+            lines = [(t, text, (ly.words[i] if ly.words else None)) for i, (t, text) in enumerate(ly.synced)]
+        elif ly and ly.plain:
+            lines = [(None, text, None) for text in ly.plain.splitlines()]
+        dirs = self.lyrics_cfg["local_dirs"]
+        cands = local_lrc_candidates(self.track, dirs)
+        local = next((c for c in cands if os.path.isfile(c)), None)
+        return {"track": self.status()["track"], "position_s": round(self.position(), 3),
+                "source": ly.source if ly else None, "lines": lines,
+                "local_path": local, "default_path": cands[-2] if len(cands) >= 2 else cands[-1]}
+
+    def reload_lyrics(self):
+        if self.track:
+            track = self.track
+            self.lyrics, self.loading = None, True
+            threading.Thread(target=self.load_for, args=(track,), daemon=True).start()
 
     def status(self):
         t = self.track
@@ -991,6 +1018,55 @@ def rounded_rect(cr, x, y, w, h, r):
     cr.close_path()
 
 
+def lyrics_main(argv):
+    """Edit the local .lrc for the playing track; the app reloads it after every change.
+
+    show            lines with index and time
+    export          write the current lyrics to the local file (creates it)
+    shift <ms>      move every timestamp
+    set <i> <time>  retime line i ('mm:ss.xx' or seconds)
+    mark            stamp the current playback position on the next untimed line (tap along)
+    clear           drop all timestamps so you can mark from scratch"""
+    from .control import call
+    if not argv or argv[0] not in ("show", "export", "shift", "set", "mark", "clear"):
+        sys.exit(lyrics_main.__doc__)
+    try:
+        info = json.loads(call("Lyrics"))
+    except GLib.Error as e:
+        sys.exit("undertone is not running" if "ServiceUnknown" in str(e) else e.message)
+    path = info["local_path"] or info["default_path"]
+    cmd = argv[0]
+    if info["local_path"]:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = parse_editable(f.read())
+    else:
+        lines = [tuple(l) for l in info["lines"]]
+    if cmd == "show":
+        print(f"{info['track']['title']} — {info['track']['artist']}  ({'local file' if info['local_path'] else info['source']})")
+        for i, (t, text, _) in enumerate(lines):
+            print(f"{i:3d}  {('[' + fmt_time(t) + ']') if t is not None else '[  --:--  ]':>11}  {text}")
+        return
+    if cmd == "export":
+        pass
+    elif cmd == "shift":
+        lines = shift_lines(lines, int(argv[1]))
+    elif cmd == "set":
+        lines = set_line_time(lines, int(argv[1]), parse_time(argv[2]))
+        lines.sort(key=lambda l: (l[0] is None, l[0] if l[0] is not None else 0))
+    elif cmd == "mark":
+        lines, idx = mark_next(lines, info["position_s"])
+        if idx < 0:
+            sys.exit("every line is already timed; use `undertone lyrics clear` to start over")
+        print(f"marked line {idx} at {fmt_time(info['position_s'])}: {lines[idx][1]}")
+    elif cmd == "clear":
+        lines = clear_times(lines)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(format_lrc(lines))
+    call("Reload")
+    print(f"wrote {path}")
+
+
 def monitors():
     display = Gdk.Display.get_default()
     out = []
@@ -1007,6 +1083,7 @@ USAGE = f"""undertone {__version__} — desktop-layer lyrics with an audio-react
 usage: undertone [--list-monitors | --install-autostart | --uninstall-autostart | --version]
        undertone ctl toggle|show|hide|cycle-vis|nudge <ms>|offset <ms>|global-offset <ms>|status
        undertone stats [--days N]        listening history (default 7 days; --days 0 for all time)
+       undertone lyrics show|export|shift <ms>|set <line> <time>|mark|clear   edit the local .lrc
 
 Runs until killed. Config: {CONFIG_PATH}
 """
@@ -1038,6 +1115,8 @@ def main(argv=None):
         return
     if argv and argv[0] == "ctl":
         return ctl_main(argv[1:])
+    if argv and argv[0] == "lyrics":
+        return lyrics_main(argv[1:])
     if argv and argv[0] == "stats":
         days = 7
         if "--days" in argv:

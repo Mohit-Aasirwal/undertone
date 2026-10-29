@@ -20,10 +20,12 @@ XML = f"""
     <method name="SetOffset"><arg type="i" name="ms" direction="in"/></method>
     <method name="SetGlobalOffset"><arg type="i" name="ms" direction="in"/></method>
     <method name="Status"><arg type="s" name="json" direction="out"/></method>
+    <method name="Lyrics"><arg type="s" name="json" direction="out"/></method>
+    <method name="Reload"/>
   </interface>
 </node>
 """
-OUT_SIG = {"CycleVisualizer": "(s)", "Nudge": "(i)", "Status": "(s)"}
+OUT_SIG = {"CycleVisualizer": "(s)", "Nudge": "(i)", "Status": "(s)", "Lyrics": "(s)"}
 COMMANDS = {
     "toggle": ("Toggle", 0), "show": ("Show", 0), "hide": ("Hide", 0), "cycle-vis": ("CycleVisualizer", 0),
     "nudge": ("Nudge", 1), "offset": ("SetOffset", 1), "global-offset": ("SetGlobalOffset", 1), "status": ("Status", 0),
