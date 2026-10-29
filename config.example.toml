@@ -98,3 +98,7 @@ scale = 1.0           # multiplies every text size
 # offset_ms = -150
 # [profiles.spotify]
 # offset_ms = 0
+
+[playback]
+# Seconds to keep the (dimmed, "paused") lightbox on screen after playback pauses before fading out.
+pause_hold_s = 8

@@ -40,7 +40,8 @@ from .theme import FALLBACK_ACCENT, FALLBACK_BASE, gtk_accent, palette_from_pixb
 
 CACHE_DIR = os.path.expanduser("~/.cache/undertone")
 POLL_MS = 250
-HIDE_GRACE_S = 3.0
+HIDE_GRACE_S = 3.0  # default pause hold; [playback] pause_hold_s overrides
+DEFAULT_PLAYBACK = {"pause_hold_s": 8.0}
 RETRY_S = 20.0
 FRAME_MS = 33
 DEFAULT_VISUALIZER = {"enabled": True, "rings": 10, "opacity": 0.2, "mode": "rings", "fps": 30}
@@ -209,8 +210,10 @@ class Playback:
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
                  translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None,
-                 frame_rate=30, font=None, profiles=None):
+                 frame_rate=30, font=None, profiles=None, playback=None):
         self.windows = windows
+        self.hold_s = float({**DEFAULT_PLAYBACK, **(playback or {})}["pause_hold_s"])
+        self.paused = False
         self.profiles = profiles or {}
         self.player = None
         self.profile = profile_for("", None)
@@ -359,6 +362,7 @@ class Playback:
         return {
             "visible": any(w.get_visible() for w in self.windows),
             "opacity": round(self.fader.value(time.monotonic()), 2),
+            "paused": self.paused,
             "hidden_by_user": self.hidden_by_user,
             "track": {"title": t.title, "artist": t.artist, "album": t.album, "length_s": t.length_us / 1e6} if t else None,
             "position_s": round(self.position(), 3) if t else None,
@@ -456,10 +460,15 @@ class Playback:
             self.last_tick = now
             if not self.hidden_by_user:
                 self.reveal()
-        elif self.track and now - self.last_playing_at > HIDE_GRACE_S:
+        elif self.track and now - self.last_playing_at > self.hold_s:
             self.conceal()
             self.finish_play()
             self.track = None
+            self.paused = False
+        paused = bool(self.track) and not track and now - self.last_playing_at > 0.4
+        if paused != self.paused:
+            self.paused = paused
+            self.redraw()
         if not track:
             self.last_tick = None
         self.redraw()
@@ -633,6 +642,28 @@ class Lightbox(Gtk.Window):
             DRAWERS[self.state.vis_mode](cr, cx, cy, max_r, audio["levels"], audio["pulse"],
                                          self.theme["accent2"], self.visualizer["opacity"], self.state.vis_state)
         self.draw_text_layer(cr, w, h, audio["pulse"])
+        if self.state.paused:
+            self.draw_paused(cr, w, h)
+
+    def draw_paused(self, cr, w, h):
+        """Dim everything and show a small pill under the header while playback is paused."""
+        cr.set_source_rgba(0, 0, 0, 0.45)
+        cr.paint()
+        layout = PangoCairo.create_layout(cr)
+        layout.set_font_description(self.font(15, bold=True))
+        layout.set_text("PAUSED", -1)
+        tw, th = layout.get_pixel_size()
+        x, y = 64, 196
+        rounded_rect(cr, x, y, tw + 44, th + 14, (th + 14) / 2)
+        cr.set_source_rgba(1, 1, 1, 0.12)
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, 0.85)
+        cr.move_to(x + 30, y + 7)
+        PangoCairo.show_layout(cr, layout)
+        cr.set_source_rgba(1, 1, 1, 0.85)  # the two bars of a pause glyph
+        cr.rectangle(x + 13, y + 9, 4, th - 4)
+        cr.rectangle(x + 20, y + 9, 4, th - 4)
+        cr.fill()
 
     def lyrics_content(self):
         """What the lyrics area should show right now: (notice, lines, idx, highlight)."""
@@ -1042,7 +1073,7 @@ def main(argv=None):
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
                      config.get("translation"), config.get("backdrop"), config.get("screensaver"),
                      os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"), int(vis["fps"]),
-                     config.get("font"), config.get("profiles"))
+                     config.get("font"), config.get("profiles"), config.get("playback"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
