@@ -1081,6 +1081,7 @@ def monitors():
 USAGE = f"""undertone {__version__} — desktop-layer lyrics with an audio-reactive visualizer
 
 usage: undertone [--list-monitors | --install-autostart | --uninstall-autostart | --version]
+                 [--install-hotkeys | --uninstall-hotkeys]   desktop shortcuts for the ctl commands
        undertone ctl toggle|show|hide|cycle-vis|nudge <ms>|offset <ms>|global-offset <ms>|status
        undertone stats [--days N]        listening history (default 7 days; --days 0 for all time)
        undertone lyrics show|export|shift <ms>|set <line> <time>|mark|clear   edit the local .lrc
@@ -1126,6 +1127,12 @@ def main(argv=None):
         return
     if "--install-autostart" in argv:
         return install_autostart()
+    if "--install-hotkeys" in argv:
+        from .hotkeys import install
+        return install()
+    if "--uninstall-hotkeys" in argv:
+        from .hotkeys import uninstall
+        return uninstall()
     if "--uninstall-autostart" in argv:
         if os.path.exists(AUTOSTART):
             os.remove(AUTOSTART)
