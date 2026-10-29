@@ -39,3 +39,23 @@ class PaletteFromPixels(unittest.TestCase):
         px = np.array([[255, 128, 0]], dtype=np.uint8)
         p = palette_from_pixels(px)
         self.assertTrue(all(0.0 <= c <= 1.0 for c in p["accent"]))
+
+
+class SecondAccent(unittest.TestCase):
+    def test_duotone_art_yields_two_distinct_accents(self):
+        px = np.zeros((1000, 3))
+        px[:600] = (0.9, 0.2, 0.2)   # red
+        px[600:] = (0.2, 0.3, 0.9)   # blue
+        p = palette_from_pixels(px)
+        h1, h2 = hue_of(p["accent"]), hue_of(p["accent2"])
+        self.assertGreater(min(abs(h1 - h2), 1 - abs(h1 - h2)), 0.2)
+
+    def test_single_hue_art_derives_a_shifted_second_accent(self):
+        px = np.tile((0.9, 0.2, 0.2), (800, 1))
+        p = palette_from_pixels(px)
+        self.assertNotEqual(p["accent"], p["accent2"])
+        self.assertGreaterEqual(colorsys.rgb_to_hsv(*p["accent2"])[2], 0.8)
+
+    def test_grey_art_has_neutral_second_accent(self):
+        p = palette_from_pixels(np.full((300, 3), 0.5))
+        self.assertEqual(p["accent2"], FALLBACK_ACCENT)

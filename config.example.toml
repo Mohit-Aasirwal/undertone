@@ -83,3 +83,9 @@ idle_minutes = 10
 enabled = false
 port = 8765
 bind = "0.0.0.0"
+
+[font]
+# Any installed family (fc-list : family). Weight applies to the current line and the title.
+family = "Sans"
+weight = "Bold"       # Bold, Semi-Bold, Heavy, Normal...
+scale = 1.0           # multiplies every text size

@@ -50,6 +50,7 @@ OFFSETS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "offsets.json")
 DEFAULT_THEME = {"source": "art"}  # art | gtk | none
 DEFAULT_TRANSLATION = {"enabled": False, "target": "hi"}
 DEFAULT_BACKDROP = {"motion": True}
+DEFAULT_FONT = {"family": "Sans", "weight": "Bold", "scale": 1.0}
 DEFAULT_SCREENSAVER = {"enabled": False, "idle_minutes": 10}
 DEFAULT_WEB = {"enabled": False, "port": 8765, "bind": "0.0.0.0"}
 IDLE_POLL_MS = 2000
@@ -207,9 +208,10 @@ class Playback:
 
     def __init__(self, windows, audio=None, players=None, theme=None, vis_mode="rings", lyrics_cfg=None,
                  translation=None, backdrop=None, screensaver=None, history_path=DB_PATH, web=None,
-                 frame_rate=30):
+                 frame_rate=30, font=None):
         self.windows = windows
         self.frame_rate = frame_rate
+        self.font = {**DEFAULT_FONT, **(font or {})}
         self.art_png = None  # PNG bytes of the current art for the web page
         self.art_registry = ArtRegistry(os.path.join(CACHE_DIR, "art-seen.json"))
         self.fps_mark = (time.monotonic(), [0] * len(windows))
@@ -548,6 +550,11 @@ class Lightbox(Gtk.Window):
             gdk_win.set_skip_pager_hint(True)
             gdk_win.stick()
 
+    def font(self, size, bold=False):
+        f = self.state.font
+        weight = f["weight"] if bold else "Normal"
+        return Pango.FontDescription(f'{f["family"]} {weight} {size * f["scale"]:.1f}')
+
     track = property(lambda self: self.state.track)
     theme = property(lambda self: self.state.theme)
     translations = property(lambda self: self.state.translations)
@@ -792,14 +799,14 @@ class Lightbox(Gtk.Window):
             cr.restore()
             x += size + 28
         layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(Pango.FontDescription("Sans Bold 22"))
+        layout.set_font_description(self.font(22, bold=True))
         layout.set_text(self.track.title, -1)
         layout.set_width((w - x - 80) * Pango.SCALE)
         layout.set_ellipsize(Pango.EllipsizeMode.END)
         cr.set_source_rgba(1, 1, 1, 0.95)
         cr.move_to(x, y + 22)
         PangoCairo.show_layout(cr, layout)
-        layout.set_font_description(Pango.FontDescription("Sans 15"))
+        layout.set_font_description(self.font(15))
         sub = self.track.artist + (f"  ·  {self.track.album}" if self.track.album else "")
         layout.set_text(sub, -1)
         cr.set_source_rgba(1, 1, 1, 0.6)
@@ -815,7 +822,7 @@ class Lightbox(Gtk.Window):
         layout.set_alignment(Pango.Alignment.CENTER)
         layout.set_width((w - 2 * margin) * Pango.SCALE)
         layout.set_wrap(Pango.WrapMode.WORD_CHAR)
-        big, small = Pango.FontDescription("Sans Bold 34"), Pango.FontDescription("Sans 24")
+        big, small = self.font(34, bold=True), self.font(24)
         gap = 22
 
         def height_of(i):
@@ -855,7 +862,7 @@ class Lightbox(Gtk.Window):
         tr = self.translations
         if not tr or i >= len(tr) or not tr[i]:
             return 0
-        layout.set_font_description(Pango.FontDescription("Sans 20"))
+        layout.set_font_description(self.font(20))
         layout.set_text(tr[i], -1)
         cr.set_source_rgba(1, 1, 1, 0.55)
         cr.move_to(x, y - 8)
@@ -863,7 +870,7 @@ class Lightbox(Gtk.Window):
         return layout.get_pixel_size()[1] + 6
 
     def draw_line(self, cr, layout, text, x, y, is_cur, highlight, dist):
-        layout.set_font_description(Pango.FontDescription("Sans Bold 34") if is_cur else Pango.FontDescription("Sans 24"))
+        layout.set_font_description(self.font(34, bold=True) if is_cur else self.font(24))
         layout.set_text(text or "♪", -1)
         if is_cur:
             ink, _logical = layout.get_pixel_extents()
@@ -883,7 +890,7 @@ class Lightbox(Gtk.Window):
 
     def draw_notice(self, cr, w, h, text):
         layout = PangoCairo.create_layout(cr)
-        layout.set_font_description(Pango.FontDescription("Sans 26"))
+        layout.set_font_description(self.font(26))
         layout.set_text(text, -1)
         tw, th = layout.get_pixel_size()
         cr.set_source_rgba(1, 1, 1, 0.45)
@@ -982,7 +989,8 @@ def main(argv=None):
     audio = AudioLevels(int(vis["rings"])) if vis["enabled"] else None
     state = Playback(windows, audio, config.get("players"), theme, vis["mode"], config.get("lyrics"),
                      config.get("translation"), config.get("backdrop"), config.get("screensaver"),
-                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"), int(vis["fps"]))
+                     os.environ.get("UNDERTONE_HISTORY") or DB_PATH, config.get("web"), int(vis["fps"]),
+                     config.get("font"))
     for win in windows:
         win.state = state
         win.connect("destroy", Gtk.main_quit)
